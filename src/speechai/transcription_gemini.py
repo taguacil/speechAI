@@ -23,14 +23,11 @@ import openai
 
 @dataclass
 class GeminiTranscriptResult:
-    """Result from Gemini transcription + analysis."""
+    """Result from Gemini transcription."""
 
     text: str
     is_final: bool
     speaker_id: str
-    sentiment: str
-    confidence: float
-    signals: list[str]
     latency_ms: float
 
 
@@ -55,11 +52,7 @@ class GeminiTranscriber:
     MIN_SPEECH_MS = 300  # Minimum speech duration to process
     MAX_BUFFER_MS = 10000  # Maximum buffer before forced send
 
-    USER_PROMPT = """Transcribe this audio and analyze the sentiment. Respond with ONLY this JSON:
-{"text": "exact transcription", "sentiment": "positive" | "negative" | "neutral", "confidence": 0.0-1.0, "signals": ["signal1"]}
-
-Sentiment: positive=interested/agreeable, negative=frustrated/objecting/price concerns, neutral=factual.
-signals: 1-3 word phrases explaining why."""
+    USER_PROMPT = """Transcribe this audio exactly. Respond with ONLY the transcription text, nothing else."""
 
     def __init__(
         self,
@@ -233,46 +226,20 @@ signals: 1-3 word phrases explaining why."""
     def _parse_response(
         self, response: Any, latency_ms: float
     ) -> GeminiTranscriptResult | None:
-        """Parse Gemini response into result."""
-        import json
-
+        """Parse Gemini transcription response."""
         try:
-            content = response.choices[0].message.content.strip()
+            text = response.choices[0].message.content.strip()
 
-            # Handle markdown code blocks
-            if "```" in content:
-                content = content.split("```")[1]
-                if content.startswith("json"):
-                    content = content[4:]
-                content = content.strip()
-
-            data = json.loads(content)
-
-            text = data.get("text", "").strip()
             if not text:
                 return None
-
-            sentiment = data.get("sentiment", "neutral").lower()
-            if sentiment not in ("positive", "negative", "neutral"):
-                sentiment = "neutral"
-
-            confidence = float(data.get("confidence", 0.5))
-            confidence = max(0.0, min(1.0, confidence))
-
-            signals = data.get("signals", [])
-            if not isinstance(signals, list):
-                signals = [str(signals)]
 
             return GeminiTranscriptResult(
                 text=text,
                 is_final=True,
                 speaker_id="Speaker",  # Gemini doesn't diarize by default
-                sentiment=sentiment,
-                confidence=confidence,
-                signals=signals[:3],
                 latency_ms=latency_ms,
             )
 
-        except (json.JSONDecodeError, ValueError, TypeError, KeyError) as e:
+        except (AttributeError, IndexError) as e:
             print(f"[Gemini] Parse error: {e}")
             return None

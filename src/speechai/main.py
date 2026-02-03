@@ -171,8 +171,13 @@ class SalesAssistant:
             for suggestion in output.suggestions:
                 print(f"    {Colors.GREEN}→{Colors.RESET} {suggestion.text}")
 
-        # Latency (for debugging, can be disabled)
-        print(f"  {Colors.DIM}[{output.total_latency_ms:.0f}ms]{Colors.RESET}")
+        # Latency breakdown (same format as Gemini for comparison)
+        total_latency = transcript.latency_ms + output.total_latency_ms
+        print(
+            f"  {Colors.BLUE}[Azure STT: {transcript.latency_ms:.0f}ms | "
+            f"Agents: {output.total_latency_ms:.0f}ms | "
+            f"Total: {total_latency:.0f}ms]{Colors.RESET}"
+        )
         print()
 
 

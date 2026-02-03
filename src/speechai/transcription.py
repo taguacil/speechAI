@@ -1,6 +1,7 @@
 """Azure Speech Service real-time transcription with speaker diarization."""
 
 import os
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -15,6 +16,7 @@ class TranscriptResult:
     is_final: bool
     speaker_id: str  # "Guest-1", "Guest-2", etc. or "Unknown"
     offset_ms: int  # When this was spoken (for ordering)
+    latency_ms: float  # Time from speech start to final result
 
 
 class AzureTranscriber:
@@ -48,6 +50,9 @@ class AzureTranscriber:
         # Speaker mapping: Azure IDs -> friendly names
         self._speaker_map: dict[str, str] = {}
         self._speaker_count = 0
+
+        # Timing: track when speech starts for latency measurement
+        self._speech_start_time: float | None = None
 
     def start(self, on_transcript: Callable[[TranscriptResult], None]) -> None:
         """Start continuous recognition with speaker diarization.
@@ -117,6 +122,10 @@ class AzureTranscriber:
     ) -> None:
         """Handle interim results (while speaking)."""
         if evt.result.text and self._on_transcript:
+            # Track speech start time for latency measurement
+            if self._speech_start_time is None:
+                self._speech_start_time = time.perf_counter()
+
             speaker = self._get_speaker_label(evt.result.speaker_id)
             offset = evt.result.offset // 10000  # Convert to ms
 
@@ -126,6 +135,7 @@ class AzureTranscriber:
                     is_final=False,
                     speaker_id=speaker,
                     offset_ms=offset,
+                    latency_ms=0,  # Not measured for interim
                 )
             )
 
@@ -135,6 +145,12 @@ class AzureTranscriber:
         """Handle final results (utterance complete)."""
         if evt.result.reason == speechsdk.ResultReason.RecognizedSpeech:
             if evt.result.text and self._on_transcript:
+                # Calculate latency from speech start
+                latency_ms = 0.0
+                if self._speech_start_time is not None:
+                    latency_ms = (time.perf_counter() - self._speech_start_time) * 1000
+                    self._speech_start_time = None  # Reset for next utterance
+
                 speaker = self._get_speaker_label(evt.result.speaker_id)
                 offset = evt.result.offset // 10000
 
@@ -144,6 +160,7 @@ class AzureTranscriber:
                         is_final=True,
                         speaker_id=speaker,
                         offset_ms=offset,
+                        latency_ms=latency_ms,
                     )
                 )
 

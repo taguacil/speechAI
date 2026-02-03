@@ -1,17 +1,21 @@
-"""Alternative entry point using Gemini for transcription + analysis.
+"""Alternative entry point using Gemini for transcription.
 
-This combines transcription and sentiment analysis in a single Gemini call,
-potentially reducing latency compared to Azure Speech + separate LLM.
+Uses Gemini 2.0 Flash for transcription, then the same analysis pipeline
+(parallel agents + consolidator) as Azure mode for fair comparison.
 
-Run with: uv run python -m speechai.main_gemini
+Run with: uv run speechai-gemini
 """
 
+import asyncio
 import signal
 import sys
 from datetime import datetime
+from pathlib import Path
 
+import yaml
 from dotenv import load_dotenv
 
+from speechai.agents.consolidator import AgentOrchestrator, ConsolidatedOutput
 from speechai.transcription_gemini import GeminiTranscriber, GeminiTranscriptResult
 
 
@@ -34,26 +38,43 @@ SENTIMENT_COLORS = {
 }
 
 
+def load_prompts() -> dict:
+    """Load prompts from YAML file."""
+    prompts_path = Path(__file__).parent / "prompts.yaml"
+    if not prompts_path.exists():
+        return {}
+    with open(prompts_path) as f:
+        return yaml.safe_load(f)
+
+
 class GeminiSalesAssistant:
-    """Sales assistant using Gemini for combined transcription + analysis."""
+    """Sales assistant using Gemini transcription + standard analysis pipeline."""
 
     def __init__(self):
+        self.prompts = load_prompts()
         self.transcriber = GeminiTranscriber()
+        self.orchestrator = AgentOrchestrator(self.prompts)
+        self.orchestrator.initialize()
+
+        self._loop: asyncio.AbstractEventLoop | None = None
         self._running = False
+        self._output_config = self.prompts.get("output", {})
 
     def start(self) -> None:
         """Start the assistant."""
         self._running = True
+        self._loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self._loop)
+
         self._print_header()
 
         # Start transcription with callback
-        self.transcriber.start(on_result=self._on_result)
+        self.transcriber.start(on_result=self._on_transcript)
 
-        # Keep running
+        # Run event loop
         try:
             while self._running:
-                import time
-                time.sleep(0.1)
+                self._loop.run_until_complete(asyncio.sleep(0.1))
         except KeyboardInterrupt:
             pass
         finally:
@@ -68,39 +89,75 @@ class GeminiSalesAssistant:
     def _print_header(self) -> None:
         """Print startup header."""
         print(f"\n{Colors.BOLD}{'=' * 60}{Colors.RESET}")
-        print(f"{Colors.BOLD}  Sales Assistant - Gemini Mode{Colors.RESET}")
-        print(f"{Colors.MAGENTA}  (Combined transcription + analysis){Colors.RESET}")
+        print(f"{Colors.BOLD}  Sales Assistant - Gemini Transcription Mode{Colors.RESET}")
+        print(f"{Colors.MAGENTA}  (Gemini STT → Parallel Agents → Consolidator){Colors.RESET}")
         print(f"{Colors.BOLD}{'=' * 60}{Colors.RESET}")
         print(f"{Colors.DIM}Listening... (speak, pause, wait for analysis){Colors.RESET}")
         print(f"{Colors.DIM}Press Ctrl+C to stop{Colors.RESET}")
         print(f"{'=' * 60}\n")
 
-    def _on_result(self, result: GeminiTranscriptResult) -> None:
-        """Handle Gemini transcription + analysis result."""
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        sentiment_color = SENTIMENT_COLORS.get(result.sentiment, Colors.YELLOW)
+    def _on_transcript(self, result: GeminiTranscriptResult) -> None:
+        """Handle Gemini transcription result - pass to orchestrator."""
+        if result.is_final and self._loop:
+            asyncio.run_coroutine_threadsafe(
+                self._process_utterance(result),
+                self._loop,
+            )
 
-        # Header with sentiment
-        print(
-            f"{Colors.DIM}[{timestamp}]{Colors.RESET} "
-            f"{Colors.CYAN}{result.speaker_id}{Colors.RESET} │ "
-            f"{sentiment_color}{Colors.BOLD}{result.sentiment.upper()}{Colors.RESET} "
-            f"{Colors.DIM}({result.confidence:.0%}){Colors.RESET}"
+    async def _process_utterance(self, transcript: GeminiTranscriptResult) -> None:
+        """Process transcription through parallel agents + consolidator."""
+        # Run through same orchestrator as Azure mode
+        output = await self.orchestrator.process(
+            text=transcript.text,
+            speaker=transcript.speaker_id,
         )
 
-        # Transcription
-        text = result.text
+        # Display results
+        self._display_output(transcript, output)
+
+    def _display_output(
+        self, transcript: GeminiTranscriptResult, output: ConsolidatedOutput
+    ) -> None:
+        """Display analysis results to sales rep."""
+        timestamp = datetime.now().strftime(
+            self._output_config.get("timestamp_format", "%H:%M:%S")
+        )
+
+        sentiment_color = SENTIMENT_COLORS.get(output.sentiment, Colors.YELLOW)
+        speaker = transcript.speaker_id
+
+        # Header with speaker and sentiment
+        print(
+            f"{Colors.DIM}[{timestamp}]{Colors.RESET} "
+            f"{Colors.CYAN}{speaker}{Colors.RESET} │ "
+            f"{sentiment_color}{Colors.BOLD}{output.sentiment.upper()}{Colors.RESET} "
+            f"{Colors.DIM}({output.confidence:.0%}){Colors.RESET}"
+        )
+
+        # Original text
+        text = transcript.text
         if len(text) > 80:
             text = text[:77] + "..."
         print(f"  {Colors.DIM}\"{text}\"{Colors.RESET}")
 
         # Signals
-        if result.signals:
-            signals_str = ", ".join(result.signals)
+        if output.signals:
+            signals_str = ", ".join(output.signals)
             print(f"  {Colors.DIM}Signals: {signals_str}{Colors.RESET}")
 
-        # Latency
-        print(f"  {Colors.MAGENTA}[Gemini: {result.latency_ms:.0f}ms]{Colors.RESET}")
+        # Suggestions
+        if output.suggestions:
+            print(f"  {Colors.BOLD}Suggestions:{Colors.RESET}")
+            for suggestion in output.suggestions:
+                print(f"    {Colors.GREEN}→{Colors.RESET} {suggestion.text}")
+
+        # Latency breakdown
+        total_latency = transcript.latency_ms + output.total_latency_ms
+        print(
+            f"  {Colors.MAGENTA}[Gemini STT: {transcript.latency_ms:.0f}ms | "
+            f"Agents: {output.total_latency_ms:.0f}ms | "
+            f"Total: {total_latency:.0f}ms]{Colors.RESET}"
+        )
         print()
 
 

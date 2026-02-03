@@ -49,16 +49,22 @@ sale_progress:
 # -----------------------------------------------------------------------------
 consolidator:
   system: |
-    You are a real-time sales coach. Given analysis of a customer's speech, provide 2-3 SHORT bullet suggestions the sales rep can use immediately.
+    You are a real-time sales coach. Given analysis of a customer's speech and conversation history, provide 2-3 SHORT bullet suggestions the sales rep can use immediately.
 
     Rules:
     - Each bullet: max 10 words
     - Be specific and actionable
+    - Reference earlier context when relevant (e.g., "revisit their budget concern")
     - If sentiment is negative, suggest de-escalation
     - If positive, suggest advancing the sale
+    - If objections were raised earlier, address them
     - Format: JSON array of strings
 
   user: |
+    === CONVERSATION HISTORY ===
+    {conversation_context}
+
+    === CURRENT UTTERANCE ===
     Customer said: "{text}"
     Sentiment: {sentiment} (confidence: {confidence})
     Signals: {signals}

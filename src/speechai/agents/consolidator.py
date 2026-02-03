@@ -54,6 +54,7 @@ class Consolidator(BaseAgent):
         sentiment = context.get("sentiment", "neutral")
         confidence = context.get("confidence", 0.0)
         signals = context.get("signals", [])
+        conversation_context = context.get("conversation_context", "")
 
         prompts = self.prompts.get("consolidator", {})
         system_prompt = prompts.get("system", "")
@@ -65,6 +66,7 @@ class Consolidator(BaseAgent):
             sentiment=sentiment,
             confidence=f"{confidence:.0%}",
             signals=", ".join(signals) if signals else "none detected",
+            conversation_context=conversation_context or "No prior context.",
         )
 
         response = await self._call_llm(system_prompt, user_prompt)
@@ -137,12 +139,18 @@ class AgentOrchestrator:
         self.sentiment_agent = SentimentAgent(self.prompts)
         self.consolidator = Consolidator(self.prompts)
 
-    async def process(self, text: str, speaker: str = "customer") -> ConsolidatedOutput:
+    async def process(
+        self,
+        text: str,
+        speaker: str = "customer",
+        conversation_context: str = "",
+    ) -> ConsolidatedOutput:
         """Process customer speech through all agents.
 
         Args:
             text: Transcribed speech.
-            speaker: Speaker identifier (only process "customer" speech).
+            speaker: Speaker identifier.
+            conversation_context: Formatted conversation history for context.
 
         Returns:
             ConsolidatedOutput with suggestions and analysis.
@@ -155,7 +163,6 @@ class AgentOrchestrator:
         start = time.perf_counter()
 
         # Run parallel agents (currently just sentiment, more can be added)
-        # Using asyncio.gather for parallel execution
         results = await asyncio.gather(
             self.sentiment_agent.analyze(text),
             # Add more agents here for parallel execution:
@@ -172,13 +179,14 @@ class AgentOrchestrator:
         else:
             sentiment_data = {"sentiment": "neutral", "confidence": 0.0, "signals": []}
 
-        # Run consolidator with combined context
+        # Run consolidator with combined context including conversation history
         consolidator_result = await self.consolidator.analyze(
             text,
             context={
                 "sentiment": sentiment_data["sentiment"],
                 "confidence": sentiment_data["confidence"],
                 "signals": sentiment_data["signals"],
+                "conversation_context": conversation_context,
             },
         )
 

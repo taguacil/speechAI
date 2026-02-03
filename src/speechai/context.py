@@ -1,0 +1,206 @@
+"""Conversation context management for session-wide tracking."""
+
+from dataclasses import dataclass, field
+from datetime import datetime
+from enum import Enum
+from typing import Any
+
+
+class SignalType(Enum):
+    """Types of signals detected in conversation."""
+
+    OBJECTION = "objection"
+    INTEREST = "interest"
+    QUESTION = "question"
+    COMPETITOR = "competitor"
+    BUDGET = "budget"
+    TIMELINE = "timeline"
+    COMMITMENT = "commitment"
+    CONCERN = "concern"
+
+
+@dataclass
+class Utterance:
+    """A single utterance in the conversation."""
+
+    text: str
+    speaker: str
+    timestamp: datetime
+    sentiment: str
+    confidence: float
+    signals: list[str]
+
+
+@dataclass
+class TrackedSignal:
+    """A structured signal extracted from conversation."""
+
+    signal_type: SignalType
+    description: str
+    utterance_index: int
+    timestamp: datetime
+
+
+@dataclass
+class ConversationContext:
+    """Maintains conversation state throughout a session.
+
+    Tracks:
+    - Full utterance history
+    - Structured signals (objections, interests, etc.)
+    - Conversation statistics
+    """
+
+    utterances: list[Utterance] = field(default_factory=list)
+    tracked_signals: list[TrackedSignal] = field(default_factory=list)
+    session_start: datetime = field(default_factory=datetime.now)
+
+    # Signal keywords for automatic extraction
+    SIGNAL_KEYWORDS: dict[SignalType, list[str]] = field(default_factory=lambda: {
+        SignalType.OBJECTION: [
+            "too expensive", "too much", "can't afford", "over budget",
+            "not sure", "hesitant", "concerned", "worried", "problem",
+        ],
+        SignalType.INTEREST: [
+            "interested", "like that", "sounds good", "tell me more",
+            "how does", "can it", "would it", "love to", "excited",
+        ],
+        SignalType.QUESTION: [
+            "how", "what", "when", "where", "why", "can you", "could you",
+            "is it possible", "do you", "does it",
+        ],
+        SignalType.COMPETITOR: [
+            "competitor", "alternative", "other option", "also looking at",
+            "compared to", "versus", "vs",
+        ],
+        SignalType.BUDGET: [
+            "budget", "cost", "price", "pricing", "afford", "expensive",
+            "cheap", "discount", "deal", "money",
+        ],
+        SignalType.TIMELINE: [
+            "when", "timeline", "deadline", "urgent", "asap", "soon",
+            "next quarter", "this month", "by end of",
+        ],
+        SignalType.COMMITMENT: [
+            "yes", "let's do it", "sounds good", "i'm in", "sign up",
+            "move forward", "next steps", "agree",
+        ],
+        SignalType.CONCERN: [
+            "concern", "worried", "issue", "problem", "risk",
+            "what if", "but", "however",
+        ],
+    })
+
+    def add_utterance(
+        self,
+        text: str,
+        speaker: str,
+        sentiment: str,
+        confidence: float,
+        signals: list[str],
+    ) -> None:
+        """Add a new utterance and extract signals."""
+        utterance = Utterance(
+            text=text,
+            speaker=speaker,
+            timestamp=datetime.now(),
+            sentiment=sentiment,
+            confidence=confidence,
+            signals=signals,
+        )
+        self.utterances.append(utterance)
+
+        # Extract structured signals from text
+        self._extract_signals(utterance, len(self.utterances) - 1)
+
+    def _extract_signals(self, utterance: Utterance, index: int) -> None:
+        """Extract structured signals from utterance text."""
+        text_lower = utterance.text.lower()
+
+        for signal_type, keywords in self.SIGNAL_KEYWORDS.items():
+            for keyword in keywords:
+                if keyword in text_lower:
+                    # Avoid duplicate signals of same type from same utterance
+                    existing = [
+                        s for s in self.tracked_signals
+                        if s.utterance_index == index and s.signal_type == signal_type
+                    ]
+                    if not existing:
+                        self.tracked_signals.append(TrackedSignal(
+                            signal_type=signal_type,
+                            description=f"{keyword} detected",
+                            utterance_index=index,
+                            timestamp=utterance.timestamp,
+                        ))
+                    break  # One match per signal type per utterance
+
+    def get_recent_utterances(self, n: int = 5) -> list[Utterance]:
+        """Get the N most recent utterances."""
+        return self.utterances[-n:]
+
+    def get_signals_by_type(self, signal_type: SignalType) -> list[TrackedSignal]:
+        """Get all signals of a specific type."""
+        return [s for s in self.tracked_signals if s.signal_type == signal_type]
+
+    def get_conversation_summary(self) -> dict[str, Any]:
+        """Get a structured summary of the conversation."""
+        sentiment_counts = {"positive": 0, "negative": 0, "neutral": 0}
+        for u in self.utterances:
+            if u.sentiment in sentiment_counts:
+                sentiment_counts[u.sentiment] += 1
+
+        signal_counts = {}
+        for s in self.tracked_signals:
+            signal_counts[s.signal_type.value] = signal_counts.get(s.signal_type.value, 0) + 1
+
+        return {
+            "total_utterances": len(self.utterances),
+            "duration_seconds": (datetime.now() - self.session_start).total_seconds(),
+            "sentiment_distribution": sentiment_counts,
+            "signal_counts": signal_counts,
+            "has_objections": len(self.get_signals_by_type(SignalType.OBJECTION)) > 0,
+            "has_interest": len(self.get_signals_by_type(SignalType.INTEREST)) > 0,
+            "has_budget_discussion": len(self.get_signals_by_type(SignalType.BUDGET)) > 0,
+        }
+
+    def format_for_prompt(self, max_utterances: int = 10) -> str:
+        """Format context for inclusion in agent prompts."""
+        lines = []
+
+        # Recent conversation
+        recent = self.get_recent_utterances(max_utterances)
+        if recent:
+            lines.append("Recent conversation:")
+            for u in recent:
+                sentiment_marker = {"positive": "+", "negative": "-", "neutral": "~"}
+                marker = sentiment_marker.get(u.sentiment, "~")
+                lines.append(f"  [{marker}] {u.speaker}: \"{u.text}\"")
+
+        # Key signals detected
+        if self.tracked_signals:
+            lines.append("\nKey signals detected:")
+            # Group by type and show most recent
+            seen_types = set()
+            for s in reversed(self.tracked_signals[-10:]):
+                if s.signal_type not in seen_types:
+                    lines.append(f"  - {s.signal_type.value}: {s.description}")
+                    seen_types.add(s.signal_type)
+
+        # Summary stats
+        summary = self.get_conversation_summary()
+        if summary["total_utterances"] > 0:
+            lines.append(f"\nConversation stats:")
+            lines.append(f"  - {summary['total_utterances']} exchanges")
+            lines.append(f"  - Sentiment: {summary['sentiment_distribution']}")
+            if summary["has_objections"]:
+                lines.append("  - ⚠️ Objections raised")
+            if summary["has_interest"]:
+                lines.append("  - ✓ Interest shown")
+
+        return "\n".join(lines) if lines else "No conversation history yet."
+
+    def clear(self) -> None:
+        """Clear all context (for new session)."""
+        self.utterances.clear()
+        self.tracked_signals.clear()
+        self.session_start = datetime.now()

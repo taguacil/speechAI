@@ -6,12 +6,12 @@ import sys
 from abc import ABC, abstractmethod
 from datetime import datetime
 from pathlib import Path
-from typing import Any
 
 import yaml
 from dotenv import load_dotenv
 
 from speechai.agents.consolidator import AgentOrchestrator, ConsolidatedOutput
+from speechai.context import ConversationContext
 from speechai.display import (
     Colors,
     DisplayConfig,
@@ -44,6 +44,7 @@ class BaseSalesAssistant(ABC):
         self.prompts = load_prompts()
         self.orchestrator = AgentOrchestrator(self.prompts)
         self.orchestrator.initialize()
+        self.context = ConversationContext()
 
         self._loop: asyncio.AbstractEventLoop | None = None
         self._running = False
@@ -79,6 +80,7 @@ class BaseSalesAssistant(ABC):
         self._running = True
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
+        self.context.clear()  # Fresh context for new session
 
         print_header(self._get_display_config())
         self._start_transcription()
@@ -95,7 +97,20 @@ class BaseSalesAssistant(ABC):
         """Stop the assistant."""
         self._running = False
         self._stop_transcription()
-        print(f"\n{Colors.DIM}Session ended.{Colors.RESET}")
+
+        # Print session summary
+        summary = self.context.get_conversation_summary()
+        if summary["total_utterances"] > 0:
+            print(f"\n{Colors.DIM}{'─' * 40}{Colors.RESET}")
+            print(f"{Colors.BOLD}Session Summary:{Colors.RESET}")
+            print(f"  Utterances: {summary['total_utterances']}")
+            print(f"  Duration: {summary['duration_seconds']:.0f}s")
+            print(f"  Sentiment: {summary['sentiment_distribution']}")
+            if summary['signal_counts']:
+                print(f"  Signals: {summary['signal_counts']}")
+            print(f"{Colors.DIM}{'─' * 40}{Colors.RESET}")
+
+        print(f"{Colors.DIM}Session ended.{Colors.RESET}")
 
     def _show_interim(self, speaker: str, text: str) -> None:
         """Show interim transcription."""
@@ -110,8 +125,24 @@ class BaseSalesAssistant(ABC):
         """Process utterance through agents and display results."""
         clear_line()
 
-        # Run through orchestrator
-        output = await self.orchestrator.process(text=text, speaker=speaker)
+        # Get formatted context for agents
+        context_str = self.context.format_for_prompt(max_utterances=10)
+
+        # Run through orchestrator with context
+        output = await self.orchestrator.process(
+            text=text,
+            speaker=speaker,
+            conversation_context=context_str,
+        )
+
+        # Add to conversation context for future reference
+        self.context.add_utterance(
+            text=text,
+            speaker=speaker,
+            sentiment=output.sentiment,
+            confidence=output.confidence,
+            signals=output.signals,
+        )
 
         # Display results
         timestamp = datetime.now().strftime(

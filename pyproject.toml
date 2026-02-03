@@ -10,11 +10,14 @@ dependencies = [
     "numpy>=2.4.2",
     "python-dotenv>=1.2.1",
     "pyyaml>=6.0.3",
+    "setuptools>=80.10.2",
     "sounddevice>=0.5.5",
+    "webrtcvad>=2.0.10",
 ]
 
 [project.scripts]
 speechai = "speechai.main:main"
+speechai-gemini = "speechai.main_gemini:main"
 
 [tool.uv]
 package = true

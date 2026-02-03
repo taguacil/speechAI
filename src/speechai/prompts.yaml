@@ -98,19 +98,23 @@ phrase_list:
 
 # -----------------------------------------------------------------------------
 # Output Format Configuration
+# Currently used by: assistant_base.py, display.py
 # -----------------------------------------------------------------------------
 output:
-  # How to display sentiment
-  sentiment_display:
-    positive: "🟢 POSITIVE"
-    negative: "🔴 NEGATIVE"
-    neutral: "🟡 NEUTRAL"
-
-  # Timestamp format
+  # Timestamp format (strftime format)
   timestamp_format: "%H:%M:%S"
 
-  # Speaker labels
-  speakers:
-    customer: "Customer"
-    sales_rep: "Sales Rep"
-    unknown: "Speaker"
+  # Display mode settings
+  mode_name: "Sales Assistant"
+
+  # Sentiment color mapping (terminal colors: green, red, yellow, blue, cyan, magenta)
+  sentiment_colors:
+    positive: "green"
+    negative: "red"
+    neutral: "yellow"
+
+  # Suggestions display format
+  suggestions:
+    header: "Suggestions:"
+    bullet: "→"
+    bullet_color: "green"

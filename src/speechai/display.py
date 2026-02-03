@@ -1,8 +1,11 @@
 """Shared display utilities for terminal output."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 from typing import Any
+
+import yaml
 
 
 class Colors:
@@ -18,20 +21,56 @@ class Colors:
     CYAN = "\033[96m"
     MAGENTA = "\033[95m"
 
+    @classmethod
+    def from_name(cls, name: str) -> str:
+        """Get color code from name."""
+        color_map = {
+            "green": cls.GREEN,
+            "red": cls.RED,
+            "yellow": cls.YELLOW,
+            "blue": cls.BLUE,
+            "cyan": cls.CYAN,
+            "magenta": cls.MAGENTA,
+        }
+        return color_map.get(name.lower(), cls.YELLOW)
 
-SENTIMENT_COLORS = {
-    "positive": Colors.GREEN,
-    "negative": Colors.RED,
-    "neutral": Colors.YELLOW,
-}
+
+def _load_output_config() -> dict:
+    """Load output config from prompts.yaml."""
+    prompts_path = Path(__file__).parent / "prompts.yaml"
+    if not prompts_path.exists():
+        return {}
+    with open(prompts_path) as f:
+        prompts = yaml.safe_load(f) or {}
+    return prompts.get("output", {})
+
+
+_OUTPUT_CONFIG = _load_output_config()
+
+
+def _build_sentiment_colors() -> dict[str, str]:
+    """Build sentiment color mapping from config."""
+    config_colors = _OUTPUT_CONFIG.get("sentiment_colors", {})
+    return {
+        "positive": Colors.from_name(config_colors.get("positive", "green")),
+        "negative": Colors.from_name(config_colors.get("negative", "red")),
+        "neutral": Colors.from_name(config_colors.get("neutral", "yellow")),
+    }
+
+
+SENTIMENT_COLORS = _build_sentiment_colors()
 
 
 @dataclass
 class DisplayConfig:
     """Configuration for output display."""
 
-    timestamp_format: str = "%H:%M:%S"
-    mode_name: str = "Sales Assistant"
+    timestamp_format: str = field(
+        default_factory=lambda: _OUTPUT_CONFIG.get("timestamp_format", "%H:%M:%S")
+    )
+    mode_name: str = field(
+        default_factory=lambda: _OUTPUT_CONFIG.get("mode_name", "Sales Assistant")
+    )
     mode_color: str = Colors.BLUE
     pipeline_description: str = ""
 
@@ -107,9 +146,13 @@ def format_output(
 
     # Suggestions
     if suggestions:
-        print(f"  {Colors.BOLD}Suggestions:{Colors.RESET}")
+        suggestions_config = _OUTPUT_CONFIG.get("suggestions", {})
+        header = suggestions_config.get("header", "Suggestions:")
+        bullet = suggestions_config.get("bullet", "→")
+        bullet_color = Colors.from_name(suggestions_config.get("bullet_color", "green"))
+        print(f"  {Colors.BOLD}{header}{Colors.RESET}")
         for suggestion in suggestions:
-            print(f"    {Colors.GREEN}→{Colors.RESET} {suggestion.text}")
+            print(f"    {bullet_color}{bullet}{Colors.RESET} {suggestion.text}")
 
     # Latency breakdown
     total_latency = stt_latency_ms + agents_latency_ms

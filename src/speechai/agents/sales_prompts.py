@@ -259,13 +259,13 @@ class SalesPromptsAgent(BaseAgent):
 
             # Use detected values or fall back to LLM response
             return {
-                "recommended_response": str(data.get("recommended_response", ""))[:200],
-                "upsell_opportunity": upsell_key or data.get("upsell_opportunity", ""),
-                "upsell_script": upsell_script[:200] if upsell_script else data.get("upsell_script", "")[:200],
-                "objection_detected": objection_key or data.get("objection_detected", ""),
-                "objection_handler": objection_handler[:200] if objection_handler else data.get("objection_handler", "")[:200],
-                "next_action": str(data.get("next_action", ""))[:100],
-                "call_stage": data.get("call_stage", "discovery"),
+                "recommended_response": str(data.get("recommended_response") or "")[:200],
+                "upsell_opportunity": upsell_key or data.get("upsell_opportunity") or "",
+                "upsell_script": upsell_script[:200] if upsell_script else (data.get("upsell_script") or "")[:200],
+                "objection_detected": objection_key or data.get("objection_detected") or "",
+                "objection_handler": objection_handler[:200] if objection_handler else (data.get("objection_handler") or "")[:200],
+                "next_action": str(data.get("next_action") or "")[:100],
+                "call_stage": data.get("call_stage") or "discovery",
             }
         except (json.JSONDecodeError, ValueError, TypeError) as e:
             print(f"[sales_prompts] Parse error: {e}")

@@ -68,8 +68,11 @@ class BaseAgent(ABC):
         Returns raw content string or None on failure.
         """
         try:
+            # Prefix with openai/ to force OpenAI-compatible mode through proxy
+            # This prevents LiteLLM from trying to use native SDKs (Vertex, etc.)
+            model = self.model if self.model.startswith("openai/") else f"openai/{self.model}"
             response = await litellm.acompletion(
-                model=self.model,
+                model=model,
                 api_base=self.base_url,
                 api_key=self.api_key,
                 messages=[

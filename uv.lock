@@ -1434,6 +1434,7 @@ dependencies = [
     { name = "litellm" },
     { name = "numpy" },
     { name = "python-dotenv" },
+    { name = "pyyaml" },
     { name = "sounddevice" },
 ]
 
@@ -1443,6 +1444,7 @@ requires-dist = [
     { name = "litellm", specifier = ">=1.81.6" },
     { name = "numpy", specifier = ">=2.4.2" },
     { name = "python-dotenv", specifier = ">=1.2.1" },
+    { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "sounddevice", specifier = ">=0.5.5" },
 ]
 

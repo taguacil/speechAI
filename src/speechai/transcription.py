@@ -1,4 +1,4 @@
-"""Azure Speech Service real-time transcription."""
+"""Azure Speech Service real-time transcription with speaker diarization."""
 
 import os
 from collections.abc import Callable
@@ -9,17 +9,19 @@ import azure.cognitiveservices.speech as speechsdk
 
 @dataclass
 class TranscriptResult:
-    """Result from transcription."""
+    """Result from transcription with speaker info."""
 
     text: str
-    is_final: bool  # True if this is a final result, False if interim
+    is_final: bool
+    speaker_id: str  # "Guest-1", "Guest-2", etc. or "Unknown"
+    offset_ms: int  # When this was spoken (for ordering)
 
 
 class AzureTranscriber:
-    """Real-time transcription using Azure Speech Service.
+    """Real-time transcription with speaker diarization.
 
-    Supports both endpoint-based config (Azure AI Foundry) and region-based config.
-    For continuous multi-utterance recognition, uses start_continuous_recognition().
+    Uses ConversationTranscriber for automatic speaker separation.
+    Supports phrase list for domain-specific vocabulary.
     """
 
     def __init__(
@@ -27,6 +29,7 @@ class AzureTranscriber:
         speech_key: str | None = None,
         speech_endpoint: str | None = None,
         language: str = "en-US",
+        phrase_list: list[str] | None = None,
     ):
         self.speech_key = speech_key or os.getenv("AZURE_SPEECH_KEY")
         self.speech_endpoint = speech_endpoint or os.getenv("AZURE_SPEECH_ENDPOINT")
@@ -38,66 +41,132 @@ class AzureTranscriber:
             )
 
         self.language = language
-        self._recognizer: speechsdk.SpeechRecognizer | None = None
+        self.phrase_list = phrase_list or []
+        self._transcriber: speechsdk.transcription.ConversationTranscriber | None = None
         self._on_transcript: Callable[[TranscriptResult], None] | None = None
 
-    def start(self, on_transcript: Callable[[TranscriptResult], None]) -> None:
-        """Start continuous recognition from microphone.
+        # Speaker mapping: Azure IDs -> friendly names
+        self._speaker_map: dict[str, str] = {}
+        self._speaker_count = 0
 
-        Uses start_continuous_recognition() for long-running multi-utterance
-        recognition instead of recognize_once().
+    def start(self, on_transcript: Callable[[TranscriptResult], None]) -> None:
+        """Start continuous recognition with speaker diarization.
 
         Args:
             on_transcript: Callback called with each transcript result.
         """
         self._on_transcript = on_transcript
 
-        # Use endpoint-based config (Azure AI Foundry style)
+        # Speech config with endpoint
         speech_config = speechsdk.SpeechConfig(
             subscription=self.speech_key,
             endpoint=self.speech_endpoint,
         )
         speech_config.speech_recognition_language = self.language
 
+        # Enable detailed output for better accuracy
+        speech_config.output_format = speechsdk.OutputFormat.Detailed
+
         # Use default microphone
         audio_config = speechsdk.AudioConfig(use_default_microphone=True)
 
-        self._recognizer = speechsdk.SpeechRecognizer(
+        # Create conversation transcriber for speaker diarization
+        self._transcriber = speechsdk.transcription.ConversationTranscriber(
             speech_config=speech_config,
             audio_config=audio_config,
         )
 
-        # Connect callbacks for continuous recognition
-        self._recognizer.recognizing.connect(self._on_recognizing)
-        self._recognizer.recognized.connect(self._on_recognized)
-        self._recognizer.canceled.connect(self._on_canceled)
-        self._recognizer.session_stopped.connect(self._on_session_stopped)
+        # Add phrase list for better recognition of domain terms
+        if self.phrase_list:
+            phrase_list_grammar = speechsdk.PhraseListGrammar.from_recognizer(
+                self._transcriber
+            )
+            for phrase in self.phrase_list:
+                phrase_list_grammar.addPhrase(phrase)
 
-        # Start continuous recognition for multi-utterance
-        self._recognizer.start_continuous_recognition()
+        # Connect callbacks for diarized transcription
+        self._transcriber.transcribing.connect(self._on_transcribing)
+        self._transcriber.transcribed.connect(self._on_transcribed)
+        self._transcriber.canceled.connect(self._on_canceled)
+        self._transcriber.session_stopped.connect(self._on_session_stopped)
+
+        # Start continuous transcription
+        self._transcriber.start_transcribing_async()
 
     def stop(self) -> None:
-        """Stop recognition."""
-        if self._recognizer:
-            self._recognizer.stop_continuous_recognition()
-            self._recognizer = None
+        """Stop transcription."""
+        if self._transcriber:
+            self._transcriber.stop_transcribing_async()
+            self._transcriber = None
 
-    def _on_recognizing(self, evt: speechsdk.SpeechRecognitionEventArgs) -> None:
+    def _get_speaker_label(self, speaker_id: str) -> str:
+        """Map Azure speaker ID to consistent label."""
+        if not speaker_id or speaker_id == "Unknown":
+            return "Unknown"
+
+        if speaker_id not in self._speaker_map:
+            self._speaker_count += 1
+            # First speaker is usually customer in inbound, sales rep in outbound
+            # Can be configured based on call direction
+            self._speaker_map[speaker_id] = f"Speaker-{self._speaker_count}"
+
+        return self._speaker_map[speaker_id]
+
+    def _on_transcribing(
+        self, evt: speechsdk.transcription.ConversationTranscriptionEventArgs
+    ) -> None:
         """Handle interim results (while speaking)."""
         if evt.result.text and self._on_transcript:
-            self._on_transcript(TranscriptResult(text=evt.result.text, is_final=False))
+            speaker = self._get_speaker_label(evt.result.speaker_id)
+            offset = evt.result.offset // 10000  # Convert to ms
 
-    def _on_recognized(self, evt: speechsdk.SpeechRecognitionEventArgs) -> None:
+            self._on_transcript(
+                TranscriptResult(
+                    text=evt.result.text,
+                    is_final=False,
+                    speaker_id=speaker,
+                    offset_ms=offset,
+                )
+            )
+
+    def _on_transcribed(
+        self, evt: speechsdk.transcription.ConversationTranscriptionEventArgs
+    ) -> None:
         """Handle final results (utterance complete)."""
         if evt.result.reason == speechsdk.ResultReason.RecognizedSpeech:
             if evt.result.text and self._on_transcript:
-                self._on_transcript(TranscriptResult(text=evt.result.text, is_final=True))
+                speaker = self._get_speaker_label(evt.result.speaker_id)
+                offset = evt.result.offset // 10000
 
-    def _on_canceled(self, evt: speechsdk.SpeechRecognitionCanceledEventArgs) -> None:
+                self._on_transcript(
+                    TranscriptResult(
+                        text=evt.result.text,
+                        is_final=True,
+                        speaker_id=speaker,
+                        offset_ms=offset,
+                    )
+                )
+
+    def _on_canceled(
+        self, evt: speechsdk.transcription.ConversationTranscriptionCanceledEventArgs
+    ) -> None:
         """Handle cancellation/errors."""
         if evt.reason == speechsdk.CancellationReason.Error:
             print(f"Transcription error: {evt.error_details}")
 
     def _on_session_stopped(self, evt: speechsdk.SessionEventArgs) -> None:
-        """Handle session stopped event."""
-        pass  # Can add logging here if needed
+        """Handle session stopped."""
+        pass
+
+    def set_speaker_label(self, azure_speaker_id: str, label: str) -> None:
+        """Manually set a speaker label (e.g., identify customer vs sales rep).
+
+        Args:
+            azure_speaker_id: The ID from Azure (e.g., "Guest-1")
+            label: Friendly label (e.g., "Customer", "Sales Rep")
+        """
+        self._speaker_map[azure_speaker_id] = label
+
+    def get_speakers(self) -> dict[str, str]:
+        """Get current speaker mapping."""
+        return self._speaker_map.copy()

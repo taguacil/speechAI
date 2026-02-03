@@ -1,0 +1,110 @@
+# =============================================================================
+# Sales Assistant Prompts
+# =============================================================================
+# All prompts are defined here for easy adjustment.
+# Variables use {variable_name} syntax and are replaced at runtime.
+#
+# Guidelines for prompt optimization:
+# - Keep prompts short and focused for lower latency
+# - Be explicit about output format (JSON)
+# - Use few-shot examples sparingly (adds tokens = latency)
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Agent: Sentiment Analysis
+# -----------------------------------------------------------------------------
+sentiment:
+  system: |
+    You are a sentiment classifier for sales conversations.
+    Analyze the CUSTOMER's speech and respond with ONLY JSON:
+    {"sentiment": "positive" | "negative" | "neutral", "confidence": 0.0-1.0, "signals": ["signal1"]}
+
+    Sentiment definitions:
+    - positive: Interested, engaged, agreeable, enthusiastic, asking buying questions
+    - negative: Frustrated, objecting, hesitant, mentioning competitors, price concerns
+    - neutral: Informational, factual, no strong emotion
+
+    signals: 1-3 word phrases explaining why (e.g., "price objection", "showing interest", "competitor mention")
+
+  user: |
+    Customer said: "{text}"
+
+# -----------------------------------------------------------------------------
+# Agent: Sale Progress (placeholder for future)
+# -----------------------------------------------------------------------------
+sale_progress:
+  system: |
+    You analyze sales conversations to determine if the deal is progressing.
+    Respond with ONLY JSON:
+    {"stage": "discovery" | "presentation" | "objection" | "closing" | "lost", "confidence": 0.0-1.0, "indicators": ["indicator1"]}
+
+  user: |
+    Conversation context:
+    {context}
+
+    Latest from customer: "{text}"
+
+# -----------------------------------------------------------------------------
+# Consolidator: Combines agent outputs into actionable suggestions
+# -----------------------------------------------------------------------------
+consolidator:
+  system: |
+    You are a real-time sales coach. Given analysis of a customer's speech, provide 2-3 SHORT bullet suggestions the sales rep can use immediately.
+
+    Rules:
+    - Each bullet: max 10 words
+    - Be specific and actionable
+    - If sentiment is negative, suggest de-escalation
+    - If positive, suggest advancing the sale
+    - Format: JSON array of strings
+
+  user: |
+    Customer said: "{text}"
+    Sentiment: {sentiment} (confidence: {confidence})
+    Signals: {signals}
+
+    Provide 2-3 bullet suggestions:
+
+# -----------------------------------------------------------------------------
+# Phrase List: Domain-specific terms for better transcription
+# -----------------------------------------------------------------------------
+# Add your product names, company terms, industry jargon here.
+# These help Azure Speech recognize specialized vocabulary.
+# -----------------------------------------------------------------------------
+phrase_list:
+  - "SaaS"
+  - "ROI"
+  - "implementation"
+  - "onboarding"
+  - "enterprise"
+  - "annual contract"
+  - "monthly subscription"
+  - "pilot program"
+  - "proof of concept"
+  - "POC"
+  - "demo"
+  - "pricing tier"
+  - "per seat"
+  - "per user"
+  # Add your specific product/company terms below:
+  # - "YourProductName"
+  # - "YourCompanyName"
+
+# -----------------------------------------------------------------------------
+# Output Format Configuration
+# -----------------------------------------------------------------------------
+output:
+  # How to display sentiment
+  sentiment_display:
+    positive: "🟢 POSITIVE"
+    negative: "🔴 NEGATIVE"
+    neutral: "🟡 NEUTRAL"
+
+  # Timestamp format
+  timestamp_format: "%H:%M:%S"
+
+  # Speaker labels
+  speakers:
+    customer: "Customer"
+    sales_rep: "Sales Rep"
+    unknown: "Speaker"

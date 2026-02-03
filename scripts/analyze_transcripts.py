@@ -56,8 +56,35 @@ Provide a detailed analysis in the following JSON format:
         "progression": "improved | worsened | stable",
         "key_moments": ["moment 1", "moment 2"]
     }},
-    "key_themes": ["theme1", "theme2"],
+    "key_themes": {{
+        "themes": ["theme1", "theme2"],
+        "count": 0
+    }},
+    "product_features_highlighted": {{
+        "fuel_efficiency": {{"mentioned": false, "details": ""}},
+        "tread_life": {{"mentioned": false, "details": ""}},
+        "superior_grip": {{"mentioned": false, "details": ""}},
+        "ride_comfort": {{"mentioned": false, "details": ""}},
+        "other_features": ["any other features mentioned"]
+    }},
     "products_services_mentioned": ["product1", "service1"],
+    "upselling": {{
+        "attempted": false,
+        "techniques": [
+            {{"type": "volume_increase | premium_upgrade | quality_upgrade | spare_tyre | other", "description": "", "approach": "calm | pushy | natural", "successful": false}}
+        ],
+        "volume_change": {{
+            "initial_quantity": 0,
+            "final_quantity": 0,
+            "spare_tyres_added": false
+        }},
+        "quality_upgrade": {{
+            "attempted": false,
+            "from_product": "",
+            "to_product": "",
+            "successful": false
+        }}
+    }},
     "objections_raised": [
         {{"objection": "description", "handled": true, "resolution": "how it was addressed"}}
     ],
@@ -83,47 +110,164 @@ Provide a detailed analysis in the following JSON format:
 Respond with ONLY valid JSON, no other text."""
 
 
-COMBINED_REPORT_PROMPT = """You are analyzing a batch of {count} sales call transcripts. Here are the individual analyses:
+COMBINED_REPORT_PROMPT = """You are an AI-driven Speech Intelligence Analyst for CEAT's call center. You are analyzing a batch of {count} sales call transcripts to develop a Dynamic Prompt Engine for Assisted Sales.
+
+PROJECT OBJECTIVES:
+- Conversion Uplift & Reduction in Cost of Acquisition (COTA)
+- Identify micro-patterns that distinguish high vs low conversion conversations
+- Identify conversion moments in calls
+- Develop context-specific prompts and objection handling cues
+- Create dynamic guidance for agents to achieve higher conversion outcomes
+
+Here are the individual analyses:
 
 {analyses}
 
-Create a comprehensive executive report that synthesizes all findings. Include:
+Create a comprehensive intelligence report with ACTIONABLE SALES AGENT PROMPTS. Structure as follows:
 
 # Executive Summary
-- Total calls analyzed
-- Overall performance metrics
-- Key trends and patterns
+- Total calls analyzed, conversion rate, key metrics
+- High-level patterns distinguishing successful vs unsuccessful calls
+- Top 3 immediate opportunities for conversion uplift
 
-# Call Outcomes Breakdown
-- Distribution of outcomes (sales, appointments, lost, etc.)
-- Success rate analysis
+# Conversion Pattern Analysis
 
-# Customer Insights
-- Common pain points across calls
-- Frequently mentioned products/services
-- Decision factors patterns
+## High Conversion Patterns
+- What micro-behaviors/phrases correlate with successful outcomes?
+- At what call moments do conversions typically happen?
+- Which product features (fuel efficiency, tread life, grip, comfort) drive conversions?
 
-# Objection Analysis
-- Most common objections
-- How well objections were handled
-- Recommended responses
+## Low Conversion Patterns
+- What patterns appear in lost/unresolved calls?
+- Where do calls typically break down?
+- Common missed opportunities
 
-# Sales Team Performance
-- Common strengths
-- Areas needing improvement
-- Best practices observed
+## Conversion Moments
+- Identify the specific moments when customer intent shifts positively
+- What triggers these moments?
+- How can agents recognize and capitalize on them?
 
-# Risk Flags & Concerns
-- Patterns that need attention
-- Recurring issues
+# Upselling Analysis
+- Volume increase success rate (2→4 tyres, spare tyres)
+- Quality/premium upgrade success rate
+- Which upselling approaches work best (calm vs pushy vs natural)?
+- Optimal timing for upselling attempts
 
-# Recommendations
-- Top 3-5 actionable recommendations based on the analysis
+# Product Feature Effectiveness
+| Feature | Times Mentioned | Conversion Impact | Best Use Context |
+|---------|-----------------|-------------------|------------------|
+| Fuel Efficiency | | | |
+| Tread Life | | | |
+| Superior Grip | | | |
+| Ride Comfort | | | |
+
+# Objection Handling Playbook
+For each common objection, provide:
+| Objection | Frequency | Best Response | Success Rate |
+|-----------|-----------|---------------|--------------|
+
+# Dynamic Sales Agent Prompts
+
+## By Customer Intent
+Provide specific prompts agents should use:
+
+### Price-Sensitive Customer
+- Opening approach: "..."
+- Key value propositions to emphasize: ...
+- Pivot phrases when price objection surfaces: "..."
+- Closing technique: "..."
+
+### Safety-Focused Customer
+- Opening approach: "..."
+- Features to highlight: ...
+- Trust-building phrases: "..."
+- Closing technique: "..."
+
+### Urgency-Driven Customer
+- Opening approach: "..."
+- Speed and availability emphasis: ...
+- Quick decision phrases: "..."
+- Closing technique: "..."
+
+### Quality-Conscious Customer
+- Opening approach: "..."
+- Premium positioning phrases: ...
+- Comparison handling: "..."
+- Closing technique: "..."
+
+## Competitor Handling Prompts
+When customer mentions competitor brands:
+- Acknowledgment phrase: "..."
+- Differentiation pivot: "..."
+- CEAT advantage positioning: "..."
+
+## Course Correction Prompts
+When negative sentiment or disengagement detected:
+- Re-engagement phrase: "..."
+- Value reframe: "..."
+- Empathy statement: "..."
+
+## Upselling Prompts
+### Volume Increase (2→4 tyres)
+- Transition phrase: "..."
+- Value proposition: "..."
+- Soft close: "..."
+
+### Spare Tyre Addition
+- Introduction: "..."
+- Safety angle: "..."
+- Convenience angle: "..."
+
+### Premium/Quality Upgrade
+- Discovery question: "..."
+- Upgrade pitch: "..."
+- ROI justification: "..."
+
+# Call Duration Efficiency
+- Optimal call length for conversions
+- Where time is wasted in unsuccessful calls
+- Efficiency recommendations
+
+# Theme Coverage Analysis
+- Average themes addressed per call
+- Correlation between theme coverage and conversion
+- Recommended minimum themes to cover
+
+# Agent Performance Insights
+- Top performing behaviors to replicate
+- Common skill gaps to address in training
+- Best practices extracted from successful calls
+
+# Risk Flags & Early Warning Signs
+- Patterns indicating call is going poorly
+- Early intervention triggers
+- Recovery tactics
+
+# Actionable Recommendations
+Prioritized list of changes that will drive conversion uplift:
+1. [Highest Impact] ...
+2. ...
+3. ...
+4. ...
+5. ...
+
+# Agent Quick Reference Card
+A condensed cheat-sheet agents can use during calls:
+
+```
+OPENING: [Best opening based on analysis]
+DISCOVERY QUESTIONS: [Top 3 questions that lead to conversion]
+FEATURE PRIORITY: [Ranked list of features to mention]
+OBJECTION RESPONSES: [Top 3 objections with one-liner responses]
+UPSELL TRIGGER: [When and how to attempt upsell]
+CLOSING: [Best closing phrases]
+RESCUE PHRASES: [When call is going poorly]
+```
 
 # Individual Call Summaries
-Brief summary of each call with outcome
+Brief summary of each call with outcome and key learnings
 
-Format the report in clean Markdown."""
+Format the report in clean Markdown with tables where appropriate."""
 
 
 class TranscriptAnalyzer:

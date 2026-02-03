@@ -2,27 +2,46 @@
 """Batch transcription using Azure Speech Service.
 
 Uploads local audio files to Azure Blob Storage and transcribes them.
-Optionally translates transcripts to English.
+Optionally translates transcripts to formatted English.
+
+Output directories:
+    data/transcripts   - JSON files from Azure Speech
+    data/translations  - Formatted English transcripts (_en.txt)
+    data/phrases.txt   - Phrase list for improved recognition
 
 Usage:
-    # Transcribe local files (uploads automatically)
+    # Transcribe local files
     python batch_transcribe.py ./data/recordings
 
-    # With speaker diarization
-    python batch_transcribe.py ./data/recordings --diarization --max-speakers 4
+    # Transcribe and translate (Azure Translator)
+    python batch_transcribe.py ./data/recordings --translate
 
-    # Transcribe and translate to English
-    python batch_transcribe.py ./data/recordings --translate --source-lang es
+    # Transcribe and translate (LLM via LiteLLM)
+    python batch_transcribe.py ./data/recordings --translate --llm
 
-    # Save results to specific directory
-    python batch_transcribe.py ./data/recordings --output ./transcripts
+    # Translate existing JSON files only
+    python batch_transcribe.py --translate-only
+    python batch_transcribe.py --translate-only --llm
 
-Environment variables required:
-    AZURE_SPEECH_KEY - Your Azure Speech subscription key
-    AZURE_SPEECH_REGION - Your Azure Speech region (e.g., swedencentral)
-    AZURE_STORAGE_CONNECTION_STRING - Your Azure Storage connection string
-    AZURE_TRANSLATOR_KEY - Your Azure Translator subscription key (for --translate)
-    AZURE_TRANSLATOR_ENDPOINT - Your Azure Translator endpoint (for --translate)
+    # Download from existing job
+    python batch_transcribe.py --job-id <id> --translate
+
+    # Use existing container (skip upload)
+    python batch_transcribe.py --container <name> --translate
+
+Environment variables:
+    AZURE_SPEECH_KEY - Azure Speech subscription key
+    AZURE_SPEECH_REGION - Azure Speech region (e.g., swedencentral)
+    AZURE_STORAGE_CONNECTION_STRING - Azure Storage connection string
+
+    For Azure translation (default):
+        AZURE_TRANSLATOR_KEY - Azure Translator subscription key
+        AZURE_TRANSLATOR_ENDPOINT - Azure Translator endpoint
+
+    For LLM translation (--llm):
+        LLM_BASE_URL - LiteLLM proxy URL (default: http://localhost:4000)
+        LLM_API_KEY - API key for LiteLLM
+        LLM_MODEL - Model to use (default: gemini-2.5-pro)
 """
 
 import argparse
@@ -34,6 +53,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import openai
 import requests
 from azure.storage.blob import (
     BlobServiceClient,
@@ -51,6 +71,23 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".ogg", ".flac", ".wma", ".aac"}
+
+
+def load_phrases(phrases_path: Path) -> list[str]:
+    """Load phrases from a file (one phrase per line)."""
+    if not phrases_path.exists():
+        logger.warning(f"Phrases file not found: {phrases_path}")
+        return []
+
+    phrases = []
+    with open(phrases_path, encoding="utf-8") as f:
+        for line in f:
+            phrase = line.strip()
+            if phrase and not phrase.startswith("#"):
+                phrases.append(phrase)
+
+    logger.info(f"Loaded {len(phrases)} phrases from {phrases_path}")
+    return phrases
 
 
 def get_audio_files(paths: list[Path]) -> list[Path]:
@@ -132,6 +169,7 @@ class AzureBatchTranscriber:
         max_speakers: int = 5,
         auto_detect_language: bool = False,
         candidate_locales: list[str] | None = None,
+        phrases: list[str] | None = None,
     ) -> dict:
         """Create a new batch transcription job."""
         url = f"{self.base_url}/transcriptions"
@@ -161,6 +199,13 @@ class AzureBatchTranscriber:
                 "candidateLocales": locales,
                 "mode": "Continuous"
             }
+
+        # Phrase list for improved recognition
+        if phrases:
+            properties["customProperties"] = {
+                "phraseList": phrases
+            }
+            logger.info(f"Added {len(phrases)} phrases to transcription request")
 
         body = {
             "displayName": name,
@@ -242,98 +287,156 @@ class AzureBatchTranscriber:
             time.sleep(poll_interval)
 
 
-def translate_document(
-    input_file: Path,
+class AzureTranslator:
+    """Azure Translator for text segments."""
+
+    def __init__(self, key: str, endpoint: str):
+        self.key = key
+        self.endpoint = endpoint
+
+    def translate(self, text: str, target_lang: str = "en") -> str:
+        """Translate text to target language."""
+        if not text.strip():
+            return text
+
+        url = f"{self.endpoint}/translator/text/v3.0/translate"
+        headers = {
+            "Ocp-Apim-Subscription-Key": self.key,
+            "Content-Type": "application/json",
+        }
+        params = {"api-version": "3.0", "to": target_lang}
+        body = [{"text": text}]
+
+        try:
+            response = requests.post(url, headers=headers, params=params, json=body)
+            response.raise_for_status()
+            result = response.json()
+            return result[0]["translations"][0]["text"]
+        except Exception as e:
+            logger.warning(f"Translation failed: {e}")
+            return text
+
+
+class LLMTranslator:
+    """LLM-based translator using LiteLLM/OpenAI API."""
+
+    def __init__(self, base_url: str, api_key: str, model: str):
+        self.client = openai.OpenAI(base_url=base_url, api_key=api_key)
+        self.model = model
+
+    def translate(self, text: str, target_lang: str = "en") -> str:
+        """Translate text to target language using LLM."""
+        if not text.strip():
+            return text
+
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": f"You are a translator. Translate the following text to {target_lang}. "
+                                   "Output ONLY the translation, nothing else. Preserve the meaning and tone.",
+                    },
+                    {"role": "user", "content": text},
+                ],
+                max_tokens=500,
+                temperature=0.1,
+            )
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            logger.warning(f"LLM translation failed: {e}")
+            return text
+
+
+def translate_json_to_transcript(
+    json_file: Path,
     output_file: Path,
-    target_lang: str,
-    translator_key: str,
-    translator_endpoint: str,
-    source_lang: str | None = None,
+    translator: Translator | None = None,
 ) -> bool:
-    """Translate a text file using Azure Translator.
+    """Convert Azure Speech JSON to formatted English transcript.
 
     Args:
-        input_file: Path to source text file.
-        output_file: Path to save translated file.
-        target_lang: Target language code (e.g., 'en').
-        translator_key: Azure Translator subscription key.
-        translator_endpoint: Azure Translator endpoint.
-        source_lang: Source language code (auto-detect if None).
+        json_file: Path to Azure Speech JSON file.
+        output_file: Path to save formatted transcript.
+        translator: Translator instance for non-English content.
 
     Returns:
         True if successful, False otherwise.
     """
-    url = f"{translator_endpoint}/translator/document:translate"
-
-    headers = {
-        "Ocp-Apim-Subscription-Key": translator_key,
-    }
-
-    params = {
-        "targetLanguage": target_lang,
-        "api-version": "2023-11-01-preview",
-    }
-
-    # Only set source language if specified (otherwise auto-detect)
-    if source_lang:
-        params["sourceLanguage"] = source_lang
-
     try:
-        with open(input_file, "rb") as document:
-            data = {
-                "document": (input_file.name, document, "text/plain"),
-            }
-            response = requests.post(url, headers=headers, files=data, params=params)
-            response.raise_for_status()
+        with open(json_file) as f:
+            data = json.load(f)
 
-        with open(output_file, "wb") as out:
-            out.write(response.content)
+        phrases = data.get("recognizedPhrases", [])
+        phrases = sorted(phrases, key=lambda p: p.get("offsetInTicks", 0))
+
+        lines = []
+        for phrase in phrases:
+            channel = phrase.get("channel", 0)
+            speaker = "Customer" if channel == 0 else "Sales Rep"
+
+            n_best = phrase.get("nBest", [])
+            if not n_best:
+                continue
+
+            display_text = n_best[0].get("display", "").strip()
+            if not display_text:
+                continue
+
+            locale = phrase.get("locale", "en-US")
+            offset_ms = phrase.get("offsetInTicks", 0) / 10_000  # ticks to ms
+            offset_sec = offset_ms / 1000
+
+            # Translate if not English
+            if translator and not locale.startswith("en"):
+                translated = translator.translate(display_text)
+                lines.append(f"[{offset_sec:.1f}s] {speaker}: {translated}")
+                if translated != display_text:
+                    lines.append(f"         (Original {locale}: {display_text})")
+            else:
+                lines.append(f"[{offset_sec:.1f}s] {speaker}: {display_text}")
+
+        with open(output_file, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
 
         return True
 
     except Exception as e:
-        logger.error(f"Translation failed for {input_file.name}: {e}")
+        logger.error(f"Failed to process {json_file.name}: {e}")
         return False
 
 
 def translate_files(
+    input_dir: Path,
     output_dir: Path,
-    target_lang: str,
-    translator_key: str,
-    translator_endpoint: str,
-    source_lang: str | None = None,
+    translator: AzureTranslator | LLMTranslator,
 ) -> None:
-    """Translate all .txt files in output directory.
+    """Translate all JSON files to formatted English transcripts.
 
     Args:
-        output_dir: Directory containing transcription files.
-        target_lang: Target language code.
-        translator_key: Azure Translator subscription key.
-        translator_endpoint: Azure Translator endpoint.
-        source_lang: Source language code (auto-detect if None).
+        input_dir: Directory containing JSON transcription files.
+        output_dir: Directory to save translated transcripts.
+        translator: Translator instance (Azure or LLM).
     """
-    # Search in output_dir and all subdirectories
-    txt_files = list(output_dir.glob("**/*.txt"))
-    # Exclude already translated files and diarized files
-    txt_files = [
-        f for f in txt_files
-        if not f.name.endswith(f"_{target_lang}.txt") and not f.name.endswith("_diarized.txt")
+    # Find JSON files (exclude analysis files)
+    json_files = [
+        f for f in input_dir.glob("**/*.json")
+        if not f.name.endswith("_analysis.json")
     ]
 
-    if not txt_files:
-        logger.warning("No text files to translate")
+    if not json_files:
+        logger.warning("No JSON files to translate")
         return
 
-    lang_msg = f"from {source_lang}" if source_lang else "(auto-detect)"
-    logger.info(f"Translating {len(txt_files)} files {lang_msg} to {target_lang}...")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    translator_type = "LLM" if isinstance(translator, LLMTranslator) else "Azure"
+    logger.info(f"Translating {len(json_files)} JSON files using {translator_type}...")
 
-    for txt_file in txt_files:
-        output_file = txt_file.with_name(f"{txt_file.stem}_{target_lang}.txt")
-        if translate_document(
-            txt_file, output_file, target_lang,
-            translator_key, translator_endpoint, source_lang
-        ):
-            logger.info(f"Translated: {txt_file.name} -> {output_file.name}")
+    for json_file in json_files:
+        output_file = output_dir / f"{json_file.stem}_en.txt"
+        if translate_json_to_transcript(json_file, output_file, translator):
+            logger.info(f"Created: {output_file.name}")
 
 
 def save_results(results: list[dict], output_dir: Path, diarized: bool = False) -> None:
@@ -390,16 +493,17 @@ def main():
     parser.add_argument("input", type=Path, nargs="*", help="Audio files or directories (skip if using --container)")
     parser.add_argument("--container", type=str, help="Use existing container name (skip upload)")
     parser.add_argument("--job-id", type=str, help="Download results from existing transcription job (skip transcription)")
-    parser.add_argument("--output", type=Path, default=Path("./transcripts"), help="Output directory")
+    parser.add_argument("--output", type=Path, default=Path("./data/transcripts"), help="Output directory for JSON transcripts")
+    parser.add_argument("--translations-dir", type=Path, default=Path("./data/translations"), help="Output directory for translations")
     parser.add_argument("--locale", type=str, default=None, help="Language locale (auto-detect if not set)")
     parser.add_argument("--diarization", action="store_true", help="Enable speaker diarization")
     parser.add_argument("--min-speakers", type=int, default=1, help="Min speakers")
     parser.add_argument("--max-speakers", type=int, default=5, help="Max speakers")
     parser.add_argument("--timeout", type=int, default=3600, help="Timeout in seconds")
-    parser.add_argument("--translate", action="store_true", help="Translate transcripts to English")
-    parser.add_argument("--translate-only", action="store_true", help="Only translate existing .txt files in output dir")
-    parser.add_argument("--source-lang", type=str, default=None, help="Source language for translation (auto-detect if not set)")
-    parser.add_argument("--target-lang", type=str, default="en", help="Target language for translation (default: en)")
+    parser.add_argument("--translate", action="store_true", help="Translate JSON files to English transcripts")
+    parser.add_argument("--translate-only", action="store_true", help="Only translate existing JSON files in output dir")
+    parser.add_argument("--llm", action="store_true", help="Use LLM for translation instead of Azure Translator")
+    parser.add_argument("--phrases", type=Path, default=Path("./data/phrases.txt"), help="File with phrases to boost recognition (one per line)")
 
     args = parser.parse_args()
     load_dotenv()
@@ -410,27 +514,31 @@ def main():
     storage_conn = os.getenv("AZURE_STORAGE_CONNECTION_STRING")
     translator_key = os.getenv("AZURE_TRANSLATOR_KEY")
     translator_endpoint = os.getenv("AZURE_TRANSLATOR_ENDPOINT")
+    llm_base_url = os.getenv("LLM_BASE_URL", "http://localhost:4000")
+    llm_api_key = os.getenv("LLM_API_KEY", "sk-1234")
+    llm_model = os.getenv("LLM_MODEL", "gemini-2.5-pro")
+
+    def get_translator() -> AzureTranslator | LLMTranslator:
+        """Create appropriate translator based on --llm flag."""
+        if args.llm:
+            logger.info(f"Using LLM translator: {llm_model}")
+            return LLMTranslator(llm_base_url, llm_api_key, llm_model)
+        else:
+            if not translator_key or not translator_endpoint:
+                logger.error("AZURE_TRANSLATOR_KEY and AZURE_TRANSLATOR_ENDPOINT required (or use --llm)")
+                sys.exit(1)
+            logger.info("Using Azure Translator")
+            return AzureTranslator(translator_key, translator_endpoint)
 
     # Handle translate-only mode first
     if args.translate_only:
-        if not translator_key or not translator_endpoint:
-            logger.error("AZURE_TRANSLATOR_KEY and AZURE_TRANSLATOR_ENDPOINT required")
-            sys.exit(1)
-        translate_files(
-            args.output,
-            args.target_lang,
-            translator_key,
-            translator_endpoint,
-            source_lang=args.source_lang,
-        )
-        logger.info(f"Done! Translations saved to: {args.output}")
+        translator = get_translator()
+        translate_files(args.output, args.translations_dir, translator)
+        logger.info(f"Done! Translations saved to: {args.translations_dir}")
         sys.exit(0)
 
     if not speech_key:
         logger.error("AZURE_SPEECH_KEY not set")
-        sys.exit(1)
-    if args.translate and (not translator_key or not translator_endpoint):
-        logger.error("AZURE_TRANSLATOR_KEY and AZURE_TRANSLATOR_ENDPOINT required for --translate")
         sys.exit(1)
 
     # Either download from existing job, use existing container, or upload files
@@ -480,6 +588,9 @@ def main():
             if auto_detect:
                 logger.info("Language auto-detection enabled")
 
+            # Load phrases if file exists
+            phrases = load_phrases(args.phrases) if args.phrases.exists() else []
+
             transcription = transcriber.create_transcription(
                 name=job_name,
                 content_container_url=sas_uri,
@@ -487,6 +598,7 @@ def main():
                 min_speakers=args.min_speakers,
                 max_speakers=args.max_speakers,
                 auto_detect_language=auto_detect,
+                phrases=phrases,
             )
             transcription_id = transcription["self"].split("/")[-1]
 
@@ -501,15 +613,11 @@ def main():
 
         # Translate if requested
         if args.translate:
-            translate_files(
-                args.output,
-                args.target_lang,
-                translator_key,
-                translator_endpoint,
-                source_lang=args.source_lang,  # None = auto-detect
-            )
+            translator = get_translator()
+            translate_files(args.output, args.translations_dir, translator)
+            logger.info(f"Translations saved to: {args.translations_dir}")
 
-        logger.info(f"Done! Results saved to: {args.output}")
+        logger.info(f"Done! Transcripts saved to: {args.output}")
 
     except Exception as e:
         logger.error(f"Error: {e}")

@@ -99,134 +99,127 @@ uv run speechai-file recordings/
 
 Supported formats: `.mp3`, `.wav`, `.m4a`, `.ogg`, `.flac`
 
-### Batch Transcription
+### Batch Transcription & Analysis Pipeline
 
-For batch processing multiple audio files with Azure Speech (higher quality, speaker diarization, translation).
+For batch processing multiple audio files with Azure Speech, translation, and LLM analysis.
 
-**Additional environment variables:**
+**Directory structure:**
+
+```
+data/
+├── phrases.txt       # Phrase list for improved recognition
+├── transcripts/      # JSON files from Azure Speech
+├── translations/     # Formatted English transcripts (_en.txt)
+└── analysis/         # Analysis JSON files + combined report
+```
+
+**Environment variables:**
 
 ```bash
-# Azure Storage (for uploading audio files)
+# Azure Speech & Storage (required for transcription)
+AZURE_SPEECH_KEY=your_key
+AZURE_SPEECH_REGION=swedencentral
 AZURE_STORAGE_CONNECTION_STRING=DefaultEndpointsProtocol=https;AccountName=...
 
-# Azure Speech region
-AZURE_SPEECH_REGION=swedencentral
-
-# Azure Translator (for translation)
+# For Azure translation:
 AZURE_TRANSLATOR_KEY=your_key
 AZURE_TRANSLATOR_ENDPOINT=https://your-endpoint.cognitiveservices.azure.com
+
+# For LLM translation (--llm flag):
+LLM_BASE_URL=http://localhost:4000
+LLM_API_KEY=sk-1234
+LLM_MODEL=kimi-2.5
 ```
 
-**Basic usage - upload and transcribe:**
+#### Transcribe
 
 ```bash
-# Transcribe all files in a directory (auto-detect language)
-uv run python scripts/batch_transcribe.py ./data/recordings --output ./data/transcripts
-
-# With specific language
-uv run python scripts/batch_transcribe.py ./data/recordings --locale es-ES --output ./data/transcripts
+# Transcribe audio files (auto-detect language)
+uv run python scripts/batch_transcribe.py ./data/recordings
 ```
 
-**With translation to English:**
+#### Translate
+
+Converts JSON transcripts to formatted English with timestamps and speaker labels.
 
 ```bash
-# Transcribe and translate (auto-detect source language)
-uv run python scripts/batch_transcribe.py ./data/recordings --translate --output ./data/transcripts
+# Using Azure Translator
+uv run python scripts/batch_transcribe.py --translate-only
 
-# Specify source language for translation
-uv run python scripts/batch_transcribe.py ./data/recordings --translate --source-lang es
+# Using LLM (recommended for better quality)
+uv run python scripts/batch_transcribe.py --translate-only --llm
 ```
 
-**Use existing Azure container (skip upload):**
+**Output format (`data/translations/*_en.txt`):**
+
+```
+[0.0s] Customer: Hello, I'm calling about your service
+[3.5s] Sales Rep: Welcome! How can I help you?
+[8.2s] Customer: I want to know the pricing details
+         (Original hi-IN: मुझे कीमत की जानकारी चाहिए)
+```
+
+#### Analyze
 
 ```bash
-# If files are already uploaded to Azure Blob Storage
-uv run python scripts/batch_transcribe.py --container my-container-name --translate
+uv run python scripts/analyze_transcripts.py
 ```
 
-**Download from existing transcription job:**
+**Output:**
+- `data/analysis/*_analysis.json` - Individual analysis per call
+- `data/analysis/report_*.md` - Combined executive report
+
+#### Combined Commands
 
 ```bash
-# Just download results from a completed job
-uv run python scripts/batch_transcribe.py --job-id xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx --output ./data/transcripts
+# Transcribe + translate in one step
+uv run python scripts/batch_transcribe.py ./data/recordings --translate --llm
 
-# Download and translate
-uv run python scripts/batch_transcribe.py --job-id xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx --translate
+# Download from existing job + translate
+uv run python scripts/batch_transcribe.py --job-id <id> --translate --llm
+
+# Use existing Azure container
+uv run python scripts/batch_transcribe.py --container <name> --translate --llm
 ```
 
-**Translate only (existing .txt files):**
+#### Phrase List
 
-```bash
-# Translate already transcribed files
-uv run python scripts/batch_transcribe.py --translate-only --output ./data/transcripts
-
-# Specify source language
-uv run python scripts/batch_transcribe.py --translate-only --source-lang es --output ./data/transcripts
-```
-
-**Output files per recording:**
+Create `data/phrases.txt` to improve recognition of domain-specific terms:
 
 ```
-data/transcripts/
-├── recording-001.json      # Full Azure response (timing, confidence, words)
-├── recording-001.txt       # Plain text transcription
-├── recording-001_en.txt    # English translation (if --translate)
-└── ...
+# One phrase per line, comments start with #
+product name
+company name
+technical term
 ```
 
-**All options:**
+#### Options Reference
+
+**batch_transcribe.py:**
 
 | Option | Description |
 |--------|-------------|
-| `--output` | Output directory (default: ./transcripts) |
-| `--locale` | Language locale, e.g., es-ES (auto-detect if not set) |
-| `--container` | Use existing Azure container name (skip upload) |
+| `--translate` | Translate after transcription |
+| `--translate-only` | Only translate existing JSON files |
+| `--llm` | Use LLM for translation (instead of Azure) |
 | `--job-id` | Download from existing transcription job |
-| `--translate` | Translate transcripts to English |
-| `--translate-only` | Only translate existing .txt files |
-| `--source-lang` | Source language for translation (auto-detect if not set) |
-| `--target-lang` | Target language (default: en) |
-| `--diarization` | Enable speaker diarization |
-| `--min-speakers` | Min speakers for diarization (default: 1) |
-| `--max-speakers` | Max speakers for diarization (default: 5) |
-| `--timeout` | Timeout in seconds (default: 3600) |
+| `--container` | Use existing Azure container (skip upload) |
+| `--phrases` | Phrase list file (default: ./data/phrases.txt) |
+| `--locale` | Language locale (auto-detect if not set) |
 
-### Transcript Analysis (LLM)
+**analyze_transcripts.py:**
 
-Analyze transcripts using Claude Opus or Gemini Pro to extract insights and generate comprehensive reports.
+| Option | Description |
+|--------|-------------|
+| `--input` | Input directory (default: ./data/translations) |
+| `--output` | Output directory (default: ./data/analysis) |
+| `--model` | LLM model (default: gemini-2.5-pro) |
 
-```bash
-# Analyze all transcripts in a directory
-uv run python scripts/analyze_transcripts.py ./data/transcripts
+#### What Analysis Extracts
 
-# Use specific model
-uv run python scripts/analyze_transcripts.py ./data/transcripts --model gemini-3-pro
+**Per call:** summary, outcome, sentiment, objections, customer pain points, sales rep performance, action items, risk flags
 
-# Save report to specific file
-uv run python scripts/analyze_transcripts.py ./data/transcripts --output ./reports/analysis.md
-
-# Also save individual analyses as JSON
-uv run python scripts/analyze_transcripts.py ./data/transcripts --json
-```
-
-**What it extracts per call:**
-- Call summary and outcome
-- Caller type and intent
-- Sentiment analysis with progression
-- Products/services mentioned
-- Objections raised and how they were handled
-- Customer pain points and priorities
-- Sales rep performance (strengths, areas for improvement)
-- Action items and follow-up notes
-- Risk flags
-
-**Combined report includes:**
-- Executive summary
-- Call outcomes breakdown
-- Customer insights across all calls
-- Objection patterns and handling
-- Sales team performance analysis
-- Recommendations
+**Combined report:** executive summary, outcomes breakdown, customer insights, objection patterns, recommendations
 
 ## Output Example
 
@@ -257,8 +250,14 @@ Session Summary:
 ## Project Structure
 
 ```
+├── data/
+│   ├── phrases.txt          # Phrase list for recognition
+│   ├── transcripts/         # JSON files from Azure Speech
+│   ├── translations/        # Formatted English transcripts
+│   └── analysis/            # Analysis JSON + reports
+│
 ├── scripts/
-│   ├── batch_transcribe.py   # Batch transcription + translation
+│   ├── batch_transcribe.py  # Batch transcription + translation
 │   └── analyze_transcripts.py # LLM-based transcript analysis
 │
 └── src/speechai/

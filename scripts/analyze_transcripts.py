@@ -1,24 +1,23 @@
 #!/usr/bin/env python
 """LLM-based analysis of transcripts.
 
-Reads Azure Speech JSON files, translates non-English content, and analyzes.
+Reads translated English transcripts (_en.txt) from data/translations.
+Outputs individual _analysis.json files and combined report to data/analysis.
 
 Usage:
-    # Analyze all transcripts in a directory
-    python analyze_transcripts.py ./data/transcripts
+    # Analyze with defaults (data/translations -> data/analysis)
+    python analyze_transcripts.py
 
     # Use specific model
-    python analyze_transcripts.py ./data/transcripts --model gemini-2.5-pro
+    python analyze_transcripts.py --model gemini-2.5-pro
 
-    # Output report to specific file
-    python analyze_transcripts.py ./data/transcripts --output ./reports/analysis.md
+    # Custom directories
+    python analyze_transcripts.py --input ./translations --output ./analysis
 
 Environment variables:
     LLM_BASE_URL - LiteLLM proxy URL (default: http://localhost:4000)
     LLM_API_KEY - API key for LiteLLM
     LLM_MODEL - Default model to use
-    AZURE_TRANSLATOR_KEY - Azure Translator key (for translation)
-    AZURE_TRANSLATOR_ENDPOINT - Azure Translator endpoint
 """
 
 import argparse
@@ -30,7 +29,6 @@ from datetime import datetime
 from pathlib import Path
 
 import openai
-import requests
 from dotenv import load_dotenv
 
 logging.basicConfig(
@@ -42,7 +40,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-INDIVIDUAL_ANALYSIS_PROMPT = """Analyze this sales call transcript and extract comprehensive information.
+INDIVIDUAL_ANALYSIS_PROMPT = """You are a transcript expert analyzer. You will get outbound calls from current and potential customers at the call center of CEAT, a tyre company in India.
+You job is to analyze the sales call transcript and extract comprehensive information according to the instructions below formalized in JSON format. The ultimate goal of the analysis is to provide insights, recommendations and a guide to improve the sales process.
 
 TRANSCRIPT:
 {transcript}
@@ -57,7 +56,7 @@ Provide a detailed analysis in the following JSON format:
         "progression": "improved | worsened | stable",
         "key_moments": ["moment 1", "moment 2"]
     }},
-    "key_topics": ["topic1", "topic2"],
+    "key_themes": ["theme1", "theme2"],
     "products_services_mentioned": ["product1", "service1"],
     "objections_raised": [
         {{"objection": "description", "handled": true, "resolution": "how it was addressed"}}
@@ -125,89 +124,6 @@ Create a comprehensive executive report that synthesizes all findings. Include:
 Brief summary of each call with outcome
 
 Format the report in clean Markdown."""
-
-
-class Translator:
-    """Azure Translator for non-English content."""
-
-    def __init__(self, key: str, endpoint: str):
-        self.key = key
-        self.endpoint = endpoint
-
-    def translate(self, text: str, target_lang: str = "en") -> str:
-        """Translate text to target language."""
-        if not text.strip():
-            return text
-
-        url = f"{self.endpoint}/translator/text/v3.0/translate"
-
-        headers = {
-            "Ocp-Apim-Subscription-Key": self.key,
-            "Content-Type": "application/json",
-        }
-
-        params = {
-            "api-version": "3.0",
-            "to": target_lang,
-        }
-
-        body = [{"text": text}]
-
-        try:
-            response = requests.post(url, headers=headers, params=params, json=body)
-            response.raise_for_status()
-            result = response.json()
-            return result[0]["translations"][0]["text"]
-        except Exception as e:
-            logger.warning(f"Translation failed: {e}")
-            return text  # Return original if translation fails
-
-
-def extract_conversation_from_json(json_data: dict, translator: Translator | None = None) -> str:
-    """Extract and format conversation from Azure Speech JSON.
-
-    Args:
-        json_data: Parsed Azure Speech JSON.
-        translator: Optional translator for non-English content.
-
-    Returns:
-        Formatted conversation string.
-    """
-    lines = []
-
-    # Get recognized phrases with timing and channel info
-    phrases = json_data.get("recognizedPhrases", [])
-
-    # Sort by offset time
-    phrases = sorted(phrases, key=lambda p: p.get("offsetInTicks", 0))
-
-    for phrase in phrases:
-        channel = phrase.get("channel", 0)
-        speaker = "Customer" if channel == 0 else "Sales Rep"
-
-        # Get best transcription
-        n_best = phrase.get("nBest", [])
-        if not n_best:
-            continue
-
-        display_text = n_best[0].get("display", "").strip()
-        if not display_text:
-            continue
-
-        locale = phrase.get("locale", "en-US")
-        offset_ms = phrase.get("offsetMilliseconds", 0)
-        offset_sec = offset_ms / 1000
-
-        # Translate if not English and translator available
-        if translator and not locale.startswith("en"):
-            translated = translator.translate(display_text)
-            lines.append(f"[{offset_sec:.1f}s] {speaker}: {translated}")
-            if translated != display_text:
-                lines.append(f"         (Original {locale}: {display_text})")
-        else:
-            lines.append(f"[{offset_sec:.1f}s] {speaker}: {display_text}")
-
-    return "\n".join(lines)
 
 
 class TranscriptAnalyzer:
@@ -299,22 +215,19 @@ class TranscriptAnalyzer:
             return f"# Error Generating Report\n\nError: {e}"
 
 
-def get_json_files(input_path: Path) -> list[Path]:
-    """Get all JSON transcript files."""
-    if input_path.is_file() and input_path.suffix == ".json":
+def get_transcript_files(input_path: Path) -> list[Path]:
+    """Get all translated English transcript files (_en.txt)."""
+    if input_path.is_file() and input_path.name.endswith("_en.txt"):
         return [input_path]
 
-    return sorted(input_path.glob("**/*.json"))
+    return sorted(input_path.glob("**/*_en.txt"))
 
 
 def main():
     parser = argparse.ArgumentParser(description="Analyze transcripts with LLM")
-    parser.add_argument("input", type=Path, help="JSON transcript file or directory")
-    parser.add_argument("--output", type=Path, default=None, help="Output report file")
+    parser.add_argument("--input", type=Path, default=Path("./data/translations"), help="Input directory with _en.txt files")
+    parser.add_argument("--output", type=Path, default=Path("./data/analysis"), help="Output directory for analysis files")
     parser.add_argument("--model", type=str, default=None, help="LLM model to use")
-    parser.add_argument("--save-json", action="store_true", help="Save individual analyses as JSON")
-    parser.add_argument("--save-transcripts", action="store_true", help="Save English transcripts")
-    parser.add_argument("--no-translate", action="store_true", help="Skip translation")
 
     args = parser.parse_args()
     load_dotenv()
@@ -324,26 +237,18 @@ def main():
     api_key = os.getenv("LLM_API_KEY", "sk-1234")
     model = args.model or os.getenv("LLM_MODEL", "gemini-2.5-pro")
 
-    # Get translator config
-    translator = None
-    if not args.no_translate:
-        translator_key = os.getenv("AZURE_TRANSLATOR_KEY")
-        translator_endpoint = os.getenv("AZURE_TRANSLATOR_ENDPOINT")
-        if translator_key and translator_endpoint:
-            translator = Translator(translator_key, translator_endpoint)
-            logger.info("Translation enabled")
-        else:
-            logger.warning("Translation disabled (AZURE_TRANSLATOR_KEY/ENDPOINT not set)")
-
     logger.info(f"Using model: {model}")
 
-    # Get JSON files
-    files = get_json_files(args.input)
+    # Get transcript files
+    files = get_transcript_files(args.input)
     if not files:
-        logger.error("No JSON transcript files found")
+        logger.error("No translated transcript files (*_en.txt) found")
         sys.exit(1)
 
-    logger.info(f"Found {len(files)} JSON files")
+    logger.info(f"Found {len(files)} transcript files")
+
+    # Create output directory
+    args.output.mkdir(parents=True, exist_ok=True)
 
     # Initialize analyzer
     analyzer = TranscriptAnalyzer(base_url, api_key, model)
@@ -354,27 +259,25 @@ def main():
         logger.info(f"Processing: {file_path.name}")
 
         try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                json_data = json.load(f)
+            conversation = file_path.read_text(encoding="utf-8")
         except Exception as e:
             logger.error(f"Failed to read {file_path}: {e}")
             continue
 
-        # Extract and translate conversation
-        conversation = extract_conversation_from_json(json_data, translator)
+        if not conversation.strip():
+            logger.warning(f"Empty transcript: {file_path.name}")
+            continue
 
-        if conversation.strip():
-            # Save English transcript if requested
-            if args.save_transcripts:
-                transcript_dir = args.output.parent if args.output else Path(".")
-                transcript_path = transcript_dir / f"{file_path.stem}_en.txt"
-                transcript_path.write_text(conversation, encoding="utf-8")
-                logger.info(f"Saved transcript: {transcript_path}")
+        # Analyze transcript
+        analysis = analyzer.analyze_single(conversation, file_path.stem)
+        analyses.append(analysis)
 
-            analysis = analyzer.analyze_single(conversation, file_path.stem)
-            analyses.append(analysis)
-        else:
-            logger.warning(f"Empty conversation in: {file_path.name}")
+        # Save individual analysis JSON to output directory
+        base_name = file_path.stem.replace("_en", "")
+        analysis_path = args.output / f"{base_name}_analysis.json"
+        with open(analysis_path, "w", encoding="utf-8") as f:
+            json.dump(analysis, f, indent=2, ensure_ascii=False)
+        logger.info(f"Saved: {analysis_path.name}")
 
     logger.info(f"Analyzed {len(analyses)} transcripts")
 
@@ -382,36 +285,22 @@ def main():
         logger.error("No transcripts were analyzed successfully")
         sys.exit(1)
 
-    # Save individual analyses as JSON if requested
-    if args.save_json:
-        json_output = args.output.with_suffix(".json") if args.output else Path("analyses.json")
-        with open(json_output, "w", encoding="utf-8") as f:
-            json.dump(analyses, f, indent=2, ensure_ascii=False)
-        logger.info(f"Saved individual analyses to: {json_output}")
-
     # Generate combined report
     report = analyzer.generate_combined_report(analyses)
 
-    # Determine output path
-    if args.output:
-        output_path = args.output
-    else:
-        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        output_path = Path(f"transcript_analysis_{timestamp}.md")
-
-    # Save report
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(report, encoding="utf-8")
-    logger.info(f"Report saved to: {output_path}")
+    # Save report to output directory
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    report_path = args.output / f"report_{timestamp}.md"
+    report_path.write_text(report, encoding="utf-8")
+    logger.info(f"Report saved to: {report_path}")
 
     # Print summary
     print("\n" + "=" * 60)
     print("ANALYSIS COMPLETE")
     print("=" * 60)
     print(f"Transcripts analyzed: {len(analyses)}")
-    print(f"Report saved to: {output_path}")
-    if args.save_json:
-        print(f"JSON analyses saved to: {json_output}")
+    print(f"Individual analyses: {args.output}/*_analysis.json")
+    print(f"Combined report: {report_path}")
     print("=" * 60)
 
 

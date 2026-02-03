@@ -44,6 +44,8 @@ Environment variables:
         LLM_MODEL - Model to use (default: gemini-2.5-pro)
 """
 
+from __future__ import annotations
+
 import argparse
 import json
 import logging
@@ -52,6 +54,7 @@ import sys
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import openai
 import requests
@@ -61,6 +64,10 @@ from azure.storage.blob import (
     generate_container_sas,
 )
 from dotenv import load_dotenv
+
+if TYPE_CHECKING:
+    from typing import Union
+    Translator = Union["AzureTranslator", "LLMTranslator"]
 
 logging.basicConfig(
     stream=sys.stdout,

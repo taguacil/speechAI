@@ -14,6 +14,12 @@ Usage:
     # Custom directories
     python analyze_transcripts.py --input ./translations --output ./analysis
 
+    # Generate report only from existing analysis JSON files
+    python analyze_transcripts.py --report-only
+
+    # Generate report from specific analysis directory
+    python analyze_transcripts.py --report-only --output ./data/analysis
+
 Environment variables:
     LLM_BASE_URL - LiteLLM proxy URL (default: http://localhost:4000)
     LLM_API_KEY - API key for LiteLLM
@@ -367,11 +373,38 @@ def get_transcript_files(input_path: Path) -> list[Path]:
     return sorted(input_path.glob("**/*_en.txt"))
 
 
+def get_analysis_files(analysis_path: Path) -> list[Path]:
+    """Get all analysis JSON files (*_analysis.json)."""
+    return sorted(analysis_path.glob("**/*_analysis.json"))
+
+
+def load_existing_analyses(analysis_path: Path) -> list[dict]:
+    """Load existing analysis JSON files."""
+    files = get_analysis_files(analysis_path)
+    analyses = []
+
+    for file_path in files:
+        try:
+            with open(file_path, encoding="utf-8") as f:
+                analysis = json.load(f)
+                # Skip files with errors
+                if "error" not in analysis:
+                    analyses.append(analysis)
+                    logger.info(f"Loaded: {file_path.name}")
+                else:
+                    logger.warning(f"Skipping {file_path.name}: contains error")
+        except Exception as e:
+            logger.error(f"Failed to load {file_path}: {e}")
+
+    return analyses
+
+
 def main():
     parser = argparse.ArgumentParser(description="Analyze transcripts with LLM")
     parser.add_argument("--input", type=Path, default=Path("./data/translations"), help="Input directory with _en.txt files")
     parser.add_argument("--output", type=Path, default=Path("./data/analysis"), help="Output directory for analysis files")
     parser.add_argument("--model", type=str, default=None, help="LLM model to use")
+    parser.add_argument("--report-only", action="store_true", help="Generate report only from existing analysis JSON files")
 
     args = parser.parse_args()
     load_dotenv()
@@ -383,56 +416,69 @@ def main():
 
     logger.info(f"Using model: {model}")
 
-    # Get transcript files
-    files = get_transcript_files(args.input)
-    if not files:
-        logger.error("No translated transcript files (*_en.txt) found")
-        sys.exit(1)
-
-    logger.info(f"Found {len(files)} transcript files")
-
-    # Create output directory
-    args.output.mkdir(parents=True, exist_ok=True)
-
     # Initialize analyzer
     analyzer = TranscriptAnalyzer(base_url, api_key, model)
 
-    # Process each file
-    analyses = []
-    for file_path in files:
-        logger.info(f"Processing: {file_path.name}")
+    if args.report_only:
+        # Load existing analyses and generate report only
+        logger.info(f"Loading existing analyses from: {args.output}")
+        analyses = load_existing_analyses(args.output)
 
-        try:
-            conversation = file_path.read_text(encoding="utf-8")
-        except Exception as e:
-            logger.error(f"Failed to read {file_path}: {e}")
-            continue
+        if not analyses:
+            logger.error(f"No analysis files (*_analysis.json) found in {args.output}")
+            sys.exit(1)
 
-        if not conversation.strip():
-            logger.warning(f"Empty transcript: {file_path.name}")
-            continue
+        logger.info(f"Loaded {len(analyses)} analysis files")
 
-        # Analyze transcript
-        analysis = analyzer.analyze_single(conversation, file_path.stem)
-        analyses.append(analysis)
+    else:
+        # Full analysis: process transcripts first
+        files = get_transcript_files(args.input)
+        if not files:
+            logger.error("No translated transcript files (*_en.txt) found")
+            sys.exit(1)
 
-        # Save individual analysis JSON to output directory
-        base_name = file_path.stem.replace("_en", "")
-        analysis_path = args.output / f"{base_name}_analysis.json"
-        with open(analysis_path, "w", encoding="utf-8") as f:
-            json.dump(analysis, f, indent=2, ensure_ascii=False)
-        logger.info(f"Saved: {analysis_path.name}")
+        logger.info(f"Found {len(files)} transcript files")
 
-    logger.info(f"Analyzed {len(analyses)} transcripts")
+        # Create output directory
+        args.output.mkdir(parents=True, exist_ok=True)
+
+        # Process each file
+        analyses = []
+        for file_path in files:
+            logger.info(f"Processing: {file_path.name}")
+
+            try:
+                conversation = file_path.read_text(encoding="utf-8")
+            except Exception as e:
+                logger.error(f"Failed to read {file_path}: {e}")
+                continue
+
+            if not conversation.strip():
+                logger.warning(f"Empty transcript: {file_path.name}")
+                continue
+
+            # Analyze transcript
+            analysis = analyzer.analyze_single(conversation, file_path.stem)
+            analyses.append(analysis)
+
+            # Save individual analysis JSON to output directory
+            base_name = file_path.stem.replace("_en", "")
+            analysis_path = args.output / f"{base_name}_analysis.json"
+            with open(analysis_path, "w", encoding="utf-8") as f:
+                json.dump(analysis, f, indent=2, ensure_ascii=False)
+            logger.info(f"Saved: {analysis_path.name}")
+
+        logger.info(f"Analyzed {len(analyses)} transcripts")
 
     if not analyses:
-        logger.error("No transcripts were analyzed successfully")
+        logger.error("No analyses available to generate report")
         sys.exit(1)
 
     # Generate combined report
     report = analyzer.generate_combined_report(analyses)
 
     # Save report to output directory
+    args.output.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     report_path = args.output / f"report_{timestamp}.md"
     report_path.write_text(report, encoding="utf-8")
@@ -440,10 +486,11 @@ def main():
 
     # Print summary
     print("\n" + "=" * 60)
-    print("ANALYSIS COMPLETE")
+    print("REPORT GENERATION COMPLETE" if args.report_only else "ANALYSIS COMPLETE")
     print("=" * 60)
-    print(f"Transcripts analyzed: {len(analyses)}")
-    print(f"Individual analyses: {args.output}/*_analysis.json")
+    print(f"Analyses used: {len(analyses)}")
+    if not args.report_only:
+        print(f"Individual analyses: {args.output}/*_analysis.json")
     print(f"Combined report: {report_path}")
     print("=" * 60)
 

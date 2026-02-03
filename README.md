@@ -162,12 +162,16 @@ uv run python scripts/batch_transcribe.py --translate-only --llm
 #### Analyze
 
 ```bash
+# Full analysis: analyze transcripts and generate report
 uv run python scripts/analyze_transcripts.py
+
+# Report only: regenerate report from existing analysis files
+uv run python scripts/analyze_transcripts.py --report-only
 ```
 
 **Output:**
 - `data/analysis/*_analysis.json` - Individual analysis per call
-- `data/analysis/report_*.md` - Combined executive report
+- `data/analysis/report_*.md` - Combined executive report (for agents & dealers)
 
 #### Combined Commands
 
@@ -214,6 +218,7 @@ technical term
 | `--input` | Input directory (default: ./data/translations) |
 | `--output` | Output directory (default: ./data/analysis) |
 | `--model` | LLM model (default: gemini-2.5-pro) |
+| `--report-only` | Generate report only from existing analysis JSON files |
 
 #### What Analysis Extracts
 

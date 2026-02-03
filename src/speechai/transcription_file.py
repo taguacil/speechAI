@@ -3,6 +3,7 @@
 import base64
 import io
 import os
+import shutil
 import subprocess
 import tempfile
 import time
@@ -15,6 +16,17 @@ import openai
 from speechai.transcription import TranscriptResult
 
 
+def _check_ffmpeg() -> None:
+    """Check if ffmpeg is available."""
+    if shutil.which("ffmpeg") is None:
+        raise FileNotFoundError(
+            "ffmpeg not found. Please install it:\n"
+            "  macOS:   brew install ffmpeg\n"
+            "  Ubuntu:  sudo apt install ffmpeg\n"
+            "  Windows: choco install ffmpeg"
+        )
+
+
 def convert_to_wav(input_path: Path, sample_rate: int = 16000) -> Path:
     """Convert audio file to WAV format using ffmpeg.
 
@@ -25,6 +37,7 @@ def convert_to_wav(input_path: Path, sample_rate: int = 16000) -> Path:
     Returns:
         Path to temporary WAV file.
     """
+    _check_ffmpeg()
     output_path = Path(tempfile.mktemp(suffix=".wav"))
 
     subprocess.run(

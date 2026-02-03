@@ -1,9 +1,8 @@
 """Main entry point for UI mode using Textual."""
 
+import argparse
 import asyncio
-import signal
-import sys
-from datetime import datetime
+import time
 from pathlib import Path
 from threading import Thread
 
@@ -29,17 +28,27 @@ def load_prompts() -> dict:
 class UISalesAssistant:
     """Sales assistant with Textual UI."""
 
-    def __init__(self):
+    def __init__(self, file_path: Path | None = None, backend: str = "gemini"):
         self.prompts = load_prompts()
         self.orchestrator = AgentOrchestrator(self.prompts)
         self.orchestrator.initialize()
         self.context = ConversationContext()
-        self.transcriber = GeminiTranscriber()
+        self.file_path = file_path
+        self.backend = backend
+
+        # Initialize transcriber based on backend
+        if backend == "gemini":
+            self.transcriber = GeminiTranscriber()
+        else:
+            # Azure transcriber for live mic
+            from speechai.transcription import AzureTranscriber
+            self.transcriber = AzureTranscriber()
 
         self._app: SpeechAIApp | None = None
         self._muted = False
         self._processing_loop: asyncio.AbstractEventLoop | None = None
         self._processing_thread: Thread | None = None
+        self._file_thread: Thread | None = None
 
     def _start_processing_loop(self) -> None:
         """Start background thread for async processing."""
@@ -58,13 +67,13 @@ class UISalesAssistant:
             self._processing_loop.call_soon_threadsafe(self._processing_loop.stop)
 
     def _on_transcript(self, result: TranscriptResult) -> None:
-        """Handle transcript results from Gemini."""
+        """Handle transcript results."""
         if self._muted:
             return
 
         if not result.is_final:
             # Update interim display
-            if self._app:
+            if self._app and self._app.is_running:
                 self._app.call_from_thread(
                     self._app.update_interim, result.speaker_id, result.text
                 )
@@ -110,7 +119,7 @@ class UISalesAssistant:
             )
 
             # Update UI
-            if self._app:
+            if self._app and self._app.is_running:
                 suggestions = [s.text for s in output.suggestions]
                 self._app.call_from_thread(
                     self._app.update_analysis,
@@ -130,7 +139,7 @@ class UISalesAssistant:
                     objection_detected=output.objection_detected,
                 )
         except Exception as e:
-            if self._app:
+            if self._app and self._app.is_running:
                 self._app.call_from_thread(self._app.show_error, str(e))
 
     def _on_reset(self) -> None:
@@ -140,6 +149,112 @@ class UISalesAssistant:
     def _on_mute(self) -> None:
         """Handle mute toggle."""
         self._muted = not self._muted
+
+    def _stream_file(self) -> None:
+        """Stream audio file through transcriber in background."""
+        if not self.file_path:
+            return
+
+        # Wait for app to be running
+        while self._app and not self._app.is_running:
+            time.sleep(0.1)
+
+        # Small delay to let UI fully initialize
+        time.sleep(0.5)
+
+        try:
+            if self._app and self._app.is_running:
+                self._app.call_from_thread(
+                    self._app._log_message,
+                    f"[dim]Streaming file: {self.file_path.name} ({self.backend})[/dim]",
+                )
+
+            if self.backend == "gemini":
+                self._stream_file_gemini()
+            else:
+                self._stream_file_azure()
+
+            if self._app and self._app.is_running:
+                self._app.call_from_thread(
+                    self._app._log_message,
+                    "[green]File streaming complete.[/green]",
+                )
+
+        except Exception as e:
+            if self._app and self._app.is_running:
+                self._app.call_from_thread(self._app.show_error, str(e))
+
+    def _stream_file_gemini(self) -> None:
+        """Stream file through Gemini transcriber."""
+        from speechai.transcription_file import load_audio_frames
+
+        frames, frame_duration = load_audio_frames(
+            self.file_path,
+            sample_rate=self.transcriber.SAMPLE_RATE,
+            frame_size=self.transcriber.FRAME_SIZE,
+        )
+
+        for frame in frames:
+            if not self._app or not self._app.is_running:
+                break
+
+            frame_start = time.perf_counter()
+            self.transcriber._audio_callback(
+                frame, self.transcriber.FRAME_SIZE, None, None
+            )
+
+            elapsed = time.perf_counter() - frame_start
+            wait_time = frame_duration - elapsed
+            if wait_time > 0:
+                time.sleep(wait_time)
+
+        time.sleep(1.5)
+
+    def _stream_file_azure(self) -> None:
+        """Stream file through Azure transcriber."""
+        from speechai.transcription_file import FileTranscriberAzure
+
+        if self._app and self._app.is_running:
+            self._app.call_from_thread(
+                self._app._log_message,
+                "[dim]Initializing Azure transcriber...[/dim]",
+            )
+
+        try:
+            transcriber = FileTranscriberAzure()
+        except Exception as e:
+            if self._app and self._app.is_running:
+                self._app.call_from_thread(
+                    self._app.show_error,
+                    f"Azure init failed: {e}",
+                )
+            return
+
+        if self._app and self._app.is_running:
+            self._app.call_from_thread(
+                self._app._log_message,
+                "[dim]Starting Azure recognition...[/dim]",
+            )
+
+        def on_azure_result(result: TranscriptResult) -> None:
+            """Wrapper to catch callback errors."""
+            try:
+                preview = result.text[:50] if len(result.text) > 50 else result.text
+                if self._app and self._app.is_running:
+                    self._app.call_from_thread(
+                        self._app._log_message,
+                        f"[cyan]Azure: {preview}[/cyan]",
+                    )
+                self._on_transcript(result)
+            except Exception as e:
+                import traceback
+                if self._app and self._app.is_running:
+                    self._app.call_from_thread(
+                        self._app.show_error,
+                        f"Callback error: {e}\n{traceback.format_exc()}",
+                    )
+
+        transcriber.stream(self.file_path, on_result=on_azure_result)
 
     def run(self) -> None:
         """Run the UI application."""
@@ -152,21 +267,55 @@ class UISalesAssistant:
         # Start background processing
         self._start_processing_loop()
 
-        # Start transcription
-        self.transcriber.start(on_result=self._on_transcript)
+        # Start transcription based on mode
+        if self.file_path:
+            # File mode: stream file in background thread
+            # For Azure file mode, we use FileTranscriberAzure directly
+            # For Gemini file mode, we need the transcriber running for callbacks
+            if self.backend == "gemini":
+                self.transcriber.start(on_result=self._on_transcript)
+            self._file_thread = Thread(target=self._stream_file, daemon=True)
+            self._file_thread.start()
+        else:
+            # Live microphone mode
+            if self.backend == "gemini":
+                self.transcriber.start(on_result=self._on_transcript)
+            else:
+                self.transcriber.start(on_transcript=self._on_transcript)
 
         try:
             # Run Textual app (blocks until quit)
             self._app.run()
         finally:
             # Cleanup
-            self.transcriber.stop()
+            if not self.file_path or self.backend == "gemini":
+                self.transcriber.stop()
             self._stop_processing_loop()
 
 
 def main() -> None:
     """Main entry point."""
-    assistant = UISalesAssistant()
+    parser = argparse.ArgumentParser(
+        description="Sales Assistant with Textual UI."
+    )
+    parser.add_argument(
+        "--file",
+        type=Path,
+        help="Audio file to stream (default: use microphone)",
+    )
+    parser.add_argument(
+        "--backend",
+        choices=["gemini", "azure"],
+        default="gemini",
+        help="Transcription backend (default: gemini)",
+    )
+    args = parser.parse_args()
+
+    if args.file and not args.file.exists():
+        print(f"File not found: {args.file}")
+        return
+
+    assistant = UISalesAssistant(file_path=args.file, backend=args.backend)
     assistant.run()
 
 

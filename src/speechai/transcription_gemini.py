@@ -174,7 +174,10 @@ class GeminiTranscriber:
                 self._on_result(result)
 
         except Exception as e:
-            print(f"[Gemini] Error: {e}")
+            # Only log if there's a meaningful error message
+            error_msg = str(e).strip()
+            if error_msg:
+                print(f"\n[Gemini] Error: {error_msg}")
 
     def _audio_to_wav_base64(self, audio_data: bytes) -> str:
         """Convert raw PCM audio to base64-encoded WAV."""
@@ -190,7 +193,11 @@ class GeminiTranscriber:
     def _parse_response(self, response: Any, latency_ms: float) -> TranscriptResult | None:
         """Parse Gemini transcription response."""
         try:
-            text = response.choices[0].message.content.strip()
+            content = response.choices[0].message.content
+            if not content:
+                return None
+
+            text = content.strip()
             if not text:
                 return None
 
@@ -201,6 +208,6 @@ class GeminiTranscriber:
                 offset_ms=0,
                 latency_ms=latency_ms,
             )
-        except (AttributeError, IndexError) as e:
-            print(f"[Gemini] Parse error: {e}")
+        except (AttributeError, IndexError):
+            # No valid response - likely silence or noise
             return None

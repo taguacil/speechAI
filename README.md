@@ -67,7 +67,7 @@ cd speechAI
 uv sync
 ```
 
-### Dependencies
+### System Dependencies
 
 - **ffmpeg** - Required for audio file processing (MP3 conversion)
 
@@ -78,6 +78,14 @@ brew install ffmpeg
 # Ubuntu/Debian
 sudo apt install ffmpeg
 ```
+
+### Python Dependencies
+
+Key libraries (installed automatically via `uv sync`):
+- **textual** - Terminal UI framework for the dashboard
+- **azure-cognitiveservices-speech** - Azure Speech SDK
+- **litellm** - LLM routing for agents
+- **sounddevice** / **webrtcvad** - Audio capture and voice activity detection
 
 ## Configuration
 
@@ -122,7 +130,7 @@ LITELLM_MODEL_CONSOLIDATOR=claude-haiku-4.5
 
 ## Usage
 
-### Live Microphone Mode
+### Live Microphone Mode (Console)
 
 ```bash
 # Azure Speech transcription
@@ -137,16 +145,44 @@ uv run speechai-gemini
 - `m` - Mute/unmute (pause processing)
 - `q` - Quit
 
-### File Processing Mode
+### UI Mode (Textual Dashboard)
 
-Process recorded audio files for testing:
+Real-time dashboard with fixed panels that update as utterances are detected:
 
 ```bash
-# Single file (Gemini backend)
+# Live microphone with Gemini (default)
+uv run speechai-ui
+
+# Live microphone with Azure
+uv run speechai-ui --backend azure
+
+# Stream from audio file
+uv run speechai-ui --file recording.mp3
+
+# Stream from file with Azure backend
+uv run speechai-ui --file recording.mp3 --backend azure
+```
+
+**UI Layout:**
+- Fixed panels for Sentiment, Persona, Product, Competitors
+- Suggestions panel with 2-3 actionable bullets
+- Real-time latency display
+- Scrollable history log
+- Keyboard shortcuts: `r`=reset, `m`=mute, `q`=quit
+
+### File Streaming Mode (Console)
+
+Stream audio files through the pipeline with real-time simulation:
+
+```bash
+# Stream file with Gemini (default, real-time pacing)
 uv run speechai-file recording.mp3
 
-# Single file (Azure backend)
+# Stream file with Azure
 uv run speechai-file recording.mp3 --backend azure
+
+# Fast mode (no real-time pacing)
+uv run speechai-file recording.mp3 --no-realtime
 
 # Process all files in directory
 uv run speechai-file recordings/
@@ -333,15 +369,17 @@ Session Summary:
 │   └── analyze_transcripts.py # LLM-based transcript analysis
 │
 └── src/speechai/
-    ├── main.py              # Azure mode entry point
-    ├── main_gemini.py       # Gemini mode entry point
-    ├── main_file.py         # File processing entry point
+    ├── main.py              # Azure mode entry point (console)
+    ├── main_gemini.py       # Gemini mode entry point (console)
+    ├── main_file.py         # File streaming entry point (console)
+    ├── main_ui.py           # Textual UI entry point (dashboard)
+    ├── ui.py                # Textual UI components
     ├── assistant_base.py    # Shared assistant logic + orchestrator
     ├── display.py           # Terminal output formatting
     ├── context.py           # Conversation context tracking
     ├── transcription.py     # Azure Speech transcriber
     ├── transcription_gemini.py  # Gemini transcriber
-    ├── transcription_file.py    # File-based transcription
+    ├── transcription_file.py    # File-based transcription utilities
     ├── prompts.yaml         # Agent prompts + CEAT domain knowledge
     └── agents/
         ├── __init__.py      # Exports all agents and constants

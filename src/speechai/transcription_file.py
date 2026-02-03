@@ -8,9 +8,11 @@ import subprocess
 import tempfile
 import time
 import wave
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import openai
 
 from speechai.transcription import TranscriptResult
@@ -245,3 +247,121 @@ class FileTranscriberAzure:
         finally:
             if cleanup_wav and wav_path.exists():
                 wav_path.unlink()
+
+    def stream(
+        self,
+        audio_path: Path,
+        on_result: Callable[[TranscriptResult], None],
+    ) -> None:
+        """Stream transcription results as they are recognized.
+
+        Azure Speech naturally streams results as it processes the file.
+
+        Args:
+            audio_path: Path to audio file.
+            on_result: Callback for each transcription result.
+        """
+        import azure.cognitiveservices.speech as speechsdk
+
+        # Convert to WAV if needed
+        if audio_path.suffix.lower() != ".wav":
+            wav_path = convert_to_wav(audio_path)
+            cleanup_wav = True
+        else:
+            wav_path = audio_path
+            cleanup_wav = False
+
+        try:
+            speech_config = speechsdk.SpeechConfig(
+                subscription=self.speech_key,
+                endpoint=self.speech_endpoint,
+            )
+            speech_config.speech_recognition_language = self.language
+
+            audio_config = speechsdk.AudioConfig(filename=str(wav_path))
+            recognizer = speechsdk.SpeechRecognizer(
+                speech_config=speech_config,
+                audio_config=audio_config,
+            )
+
+            done = False
+            start_time = time.perf_counter()
+
+            def on_recognized(evt):
+                if evt.result.reason == speechsdk.ResultReason.RecognizedSpeech:
+                    latency_ms = (time.perf_counter() - start_time) * 1000
+                    result = TranscriptResult(
+                        text=evt.result.text,
+                        is_final=True,
+                        speaker_id="Speaker",
+                        offset_ms=evt.result.offset / 10000,  # ticks to ms
+                        latency_ms=latency_ms,
+                    )
+                    on_result(result)
+
+            def on_session_stopped(evt):
+                nonlocal done
+                done = True
+
+            def on_canceled(evt):
+                nonlocal done
+                done = True
+
+            recognizer.recognized.connect(on_recognized)
+            recognizer.session_stopped.connect(on_session_stopped)
+            recognizer.canceled.connect(on_canceled)
+
+            recognizer.start_continuous_recognition()
+
+            while not done:
+                time.sleep(0.1)
+
+            recognizer.stop_continuous_recognition()
+
+        finally:
+            if cleanup_wav and wav_path.exists():
+                wav_path.unlink()
+
+
+def load_audio_frames(
+    audio_path: Path,
+    sample_rate: int = 16000,
+    frame_size: int = 480,
+) -> tuple[np.ndarray, float]:
+    """Load audio file and return as frames ready for streaming.
+
+    Args:
+        audio_path: Path to audio file.
+        sample_rate: Target sample rate.
+        frame_size: Samples per frame.
+
+    Returns:
+        Tuple of (audio frames as 2D numpy array, frame duration in seconds).
+    """
+    # Convert to WAV at correct sample rate
+    wav_path = convert_to_wav(audio_path, sample_rate)
+
+    try:
+        with wave.open(str(wav_path), "rb") as wav_file:
+            n_frames = wav_file.getnframes()
+            audio_data = wav_file.readframes(n_frames)
+
+        # Convert to numpy array (16-bit mono)
+        audio_array = np.frombuffer(audio_data, dtype=np.int16)
+
+        # Pad to multiple of frame_size
+        remainder = len(audio_array) % frame_size
+        if remainder:
+            audio_array = np.pad(audio_array, (0, frame_size - remainder))
+
+        # Reshape to (n_frames, frame_size) then add channel dim -> (n_frames, frame_size, 1)
+        n_audio_frames = len(audio_array) // frame_size
+        frames = audio_array.reshape(n_audio_frames, frame_size, 1)
+
+        frame_duration_sec = frame_size / sample_rate
+
+        return frames, frame_duration_sec
+
+    finally:
+        if wav_path.exists() and wav_path != audio_path:
+            wav_path.unlink()

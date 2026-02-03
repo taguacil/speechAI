@@ -1,14 +1,16 @@
-"""Process audio files for testing.
+"""Process audio files with real-time streaming.
 
 Run with:
     uv run speechai-file recording.mp3
     uv run speechai-file recording.mp3 --backend azure
-    uv run speechai-file recordings/ --backend gemini
+    uv run speechai-file recording.mp3 --no-realtime
+    uv run speechai-file recordings/
 """
 
 import argparse
 import asyncio
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -17,7 +19,8 @@ from dotenv import load_dotenv
 from speechai.agents.consolidator import AgentOrchestrator
 from speechai.assistant_base import load_prompts
 from speechai.context import ConversationContext
-from speechai.display import Colors, format_output
+from speechai.display import Colors, clear_line, format_output, print_interim
+from speechai.transcription import TranscriptResult
 
 
 def get_audio_files(path: Path) -> list[Path]:
@@ -35,86 +38,175 @@ def get_audio_files(path: Path) -> list[Path]:
         return []
 
 
-async def process_file(
-    audio_path: Path,
-    transcriber,
-    orchestrator: AgentOrchestrator,
-    context: ConversationContext,
-    backend: str,
-) -> None:
-    """Process a single audio file through the pipeline."""
-    print(f"\n{Colors.CYAN}{'─' * 60}{Colors.RESET}")
-    print(f"{Colors.BOLD}Processing: {audio_path.name}{Colors.RESET}")
-    print(f"{Colors.DIM}{'─' * 60}{Colors.RESET}")
+class FileStreamProcessor:
+    """Process audio files by streaming through transcriber."""
 
-    # Transcribe
-    result = transcriber.transcribe(audio_path)
+    def __init__(
+        self,
+        orchestrator: AgentOrchestrator,
+        context: ConversationContext,
+        backend: str = "gemini",
+        realtime: bool = True,
+    ):
+        self.orchestrator = orchestrator
+        self.context = context
+        self.backend = backend
+        self.realtime = realtime
+        self._mode_color = Colors.MAGENTA if backend == "gemini" else Colors.BLUE
+        self._stt_label = "Gemini STT" if backend == "gemini" else "Azure STT"
+        # Persistent event loop for async processing
+        self._loop = asyncio.new_event_loop()
 
-    if not result or not result.text:
-        print(f"{Colors.RED}No transcription result{Colors.RESET}")
-        return
+    def close(self) -> None:
+        """Clean up resources."""
+        if self._loop and not self._loop.is_closed():
+            self._loop.close()
 
-    print(f"\n{Colors.DIM}Transcription ({result.latency_ms:.0f}ms):{Colors.RESET}")
-    print(f"  \"{result.text}\"")
+    def process_file(self, audio_path: Path) -> None:
+        """Stream audio file through transcriber and process results."""
+        print(f"\n{Colors.CYAN}{'─' * 60}{Colors.RESET}")
+        print(f"{Colors.BOLD}Streaming: {audio_path.name}{Colors.RESET}")
+        print(f"{Colors.DIM}{'─' * 60}{Colors.RESET}\n")
 
-    # Get context and process through agents
-    context_str = context.format_for_prompt(max_utterances=10)
+        if self.backend == "gemini":
+            self._process_with_gemini(audio_path)
+        else:
+            self._process_with_azure(audio_path)
 
-    output = await orchestrator.process(
-        text=result.text,
-        speaker=result.speaker_id,
-        conversation_context=context_str,
-    )
+    def _process_with_gemini(self, audio_path: Path) -> None:
+        """Process file using Gemini transcriber."""
+        from speechai.transcription_file import load_audio_frames
+        from speechai.transcription_gemini import GeminiTranscriber
 
-    # Add to context
-    context.add_utterance(
-        text=result.text,
-        speaker=result.speaker_id,
-        sentiment=output.sentiment,
-        confidence=output.confidence,
-        signals=output.signals,
-        # Multi-agent outputs
-        persona_name=output.persona_name,
-        products_mentioned=output.products_mentioned,
-        competitors_mentioned=output.competitors_mentioned,
-        upsell_opportunities=output.upsell_opportunities,
-    )
+        transcriber = GeminiTranscriber()
+        transcriber.start(on_result=self._on_transcript)
 
-    # Display results
-    timestamp = datetime.now().strftime("%H:%M:%S")
-    stt_label = "Gemini STT" if backend == "gemini" else "Azure STT"
-    mode_color = Colors.MAGENTA if backend == "gemini" else Colors.BLUE
+        try:
+            # Load audio frames
+            frames, frame_duration = load_audio_frames(
+                audio_path,
+                sample_rate=transcriber.SAMPLE_RATE,
+                frame_size=transcriber.FRAME_SIZE,
+            )
 
-    print()
-    format_output(
-        timestamp=timestamp,
-        speaker=result.speaker_id,
-        text=result.text,
-        sentiment=output.sentiment,
-        confidence=output.confidence,
-        signals=output.signals,
-        suggestions=output.suggestions,
-        stt_latency_ms=result.latency_ms,
-        agents_latency_ms=output.total_latency_ms,
-        mode_color=mode_color,
-        stt_label=stt_label,
-        # Multi-agent outputs
-        persona_name=output.persona_name,
-        persona_segment=output.persona_segment,
-        products_mentioned=output.products_mentioned,
-        upsell_opportunities=output.upsell_opportunities,
-        recommended_product=output.recommended_product,
-        competitors_mentioned=output.competitors_mentioned,
-        counter_positioning=output.counter_positioning,
-        objection_detected=output.objection_detected,
-        upsell_script=output.upsell_script,
-    )
+            total_duration = len(frames) * frame_duration
+            print(f"{Colors.DIM}Duration: {total_duration:.1f}s | Frames: {len(frames)}{Colors.RESET}")
+            print(f"{Colors.DIM}Listening...{Colors.RESET}\n")
+
+            # Feed frames to transcriber
+            for i, frame in enumerate(frames):
+                frame_start = time.perf_counter()
+
+                # Feed frame to transcriber's audio callback
+                transcriber._audio_callback(frame, transcriber.FRAME_SIZE, None, None)
+
+                # Show progress every second
+                elapsed_audio = i * frame_duration
+                if i % int(1.0 / frame_duration) == 0:
+                    progress = elapsed_audio / total_duration * 100
+                    status = "speaking" if transcriber._is_speaking else "silence"
+                    print(
+                        f"\r{Colors.DIM}[{elapsed_audio:.1f}s / {total_duration:.1f}s] "
+                        f"{progress:.0f}% - {status}{Colors.RESET}",
+                        end="",
+                        flush=True,
+                    )
+
+                # Real-time pacing
+                if self.realtime:
+                    elapsed = time.perf_counter() - frame_start
+                    wait_time = frame_duration - elapsed
+                    if wait_time > 0:
+                        time.sleep(wait_time)
+
+            # Clear progress line
+            print(f"\r{' ' * 60}\r", end="")
+
+            # Wait for pending transcriptions
+            print(f"{Colors.DIM}Processing final audio...{Colors.RESET}")
+            time.sleep(1.5)
+
+        finally:
+            transcriber.stop()
+
+    def _process_with_azure(self, audio_path: Path) -> None:
+        """Process file using Azure transcriber (streams naturally)."""
+        from speechai.transcription_file import FileTranscriberAzure
+
+        print(f"{Colors.DIM}Starting Azure continuous recognition...{Colors.RESET}\n")
+
+        transcriber = FileTranscriberAzure()
+        transcriber.stream(audio_path, on_result=self._on_transcript)
+
+        print(f"\n{Colors.DIM}Azure processing complete.{Colors.RESET}")
+
+    def _on_transcript(self, result: TranscriptResult) -> None:
+        """Handle transcription result."""
+        if not result.is_final or not result.text:
+            return
+
+        # Clear progress line and show interim
+        clear_line()
+        print_interim(result.speaker_id, result.text)
+
+        # Process through agents using persistent event loop
+        self._loop.run_until_complete(self._process_and_display(result))
+
+    async def _process_and_display(self, result: TranscriptResult) -> None:
+        """Process utterance through agents and display."""
+        clear_line()
+        context_str = self.context.format_for_prompt(max_utterances=10)
+
+        output = await self.orchestrator.process(
+            text=result.text,
+            speaker=result.speaker_id,
+            conversation_context=context_str,
+        )
+
+        # Add to context
+        self.context.add_utterance(
+            text=result.text,
+            speaker=result.speaker_id,
+            sentiment=output.sentiment,
+            confidence=output.confidence,
+            signals=output.signals,
+            persona_name=output.persona_name,
+            products_mentioned=output.products_mentioned,
+            competitors_mentioned=output.competitors_mentioned,
+            upsell_opportunities=output.upsell_opportunities,
+        )
+
+        # Display
+        timestamp = datetime.now().strftime("%H:%M:%S")
+
+        format_output(
+            timestamp=timestamp,
+            speaker=result.speaker_id,
+            text=result.text,
+            sentiment=output.sentiment,
+            confidence=output.confidence,
+            signals=output.signals,
+            suggestions=output.suggestions,
+            stt_latency_ms=result.latency_ms,
+            agents_latency_ms=output.total_latency_ms,
+            mode_color=self._mode_color,
+            stt_label=self._stt_label,
+            persona_name=output.persona_name,
+            persona_segment=output.persona_segment,
+            products_mentioned=output.products_mentioned,
+            upsell_opportunities=output.upsell_opportunities,
+            recommended_product=output.recommended_product,
+            competitors_mentioned=output.competitors_mentioned,
+            counter_positioning=output.counter_positioning,
+            objection_detected=output.objection_detected,
+            upsell_script=output.upsell_script,
+        )
 
 
 def main() -> None:
     """Main entry point for file processing."""
     parser = argparse.ArgumentParser(
-        description="Process audio files through the sales assistant pipeline."
+        description="Stream audio files through the sales assistant pipeline."
     )
     parser.add_argument(
         "path",
@@ -126,6 +218,11 @@ def main() -> None:
         choices=["gemini", "azure"],
         default="gemini",
         help="Transcription backend (default: gemini)",
+    )
+    parser.add_argument(
+        "--no-realtime",
+        action="store_true",
+        help="Process as fast as possible (no real-time pacing)",
     )
 
     args = parser.parse_args()
@@ -141,14 +238,6 @@ def main() -> None:
 
     load_dotenv()
 
-    # Initialize transcriber
-    if args.backend == "gemini":
-        from speechai.transcription_file import FileTranscriberGemini
-        transcriber = FileTranscriberGemini()
-    else:
-        from speechai.transcription_file import FileTranscriberAzure
-        transcriber = FileTranscriberAzure()
-
     # Initialize orchestrator and context
     prompts = load_prompts()
     orchestrator = AgentOrchestrator(prompts)
@@ -156,24 +245,27 @@ def main() -> None:
     context = ConversationContext()
 
     # Print header
-    print(f"\n{Colors.BOLD}{'=' * 60}{Colors.RESET}")
-    print(f"{Colors.BOLD}  Sales Assistant - File Processing Mode{Colors.RESET}")
     backend_color = Colors.MAGENTA if args.backend == "gemini" else Colors.BLUE
-    print(f"{backend_color}  Backend: {args.backend.upper()}{Colors.RESET}")
+    stt_name = "Gemini" if args.backend == "gemini" else "Azure"
+    print(f"\n{Colors.BOLD}{'=' * 60}{Colors.RESET}")
+    print(f"{Colors.BOLD}  Sales Assistant - File Streaming Mode{Colors.RESET}")
+    print(f"{backend_color}  {stt_name} STT → Parallel Agents → Consolidator{Colors.RESET}")
     print(f"{Colors.BOLD}{'=' * 60}{Colors.RESET}")
-    print(f"{Colors.DIM}Files to process: {len(audio_files)}{Colors.RESET}")
+    print(f"{Colors.DIM}Files: {len(audio_files)} | Backend: {args.backend} | Realtime: {not args.no_realtime}{Colors.RESET}")
 
     # Process files
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+    processor = FileStreamProcessor(
+        orchestrator=orchestrator,
+        context=context,
+        backend=args.backend,
+        realtime=not args.no_realtime,
+    )
 
     try:
         for audio_file in audio_files:
-            loop.run_until_complete(
-                process_file(audio_file, transcriber, orchestrator, context, args.backend)
-            )
+            processor.process_file(audio_file)
     finally:
-        loop.close()
+        processor.close()
 
     # Print session summary
     summary = context.get_conversation_summary()
@@ -185,7 +277,6 @@ def main() -> None:
         print(f"  Sentiment: {summary['sentiment_distribution']}")
         if summary['signal_counts']:
             print(f"  Signals: {summary['signal_counts']}")
-        # Multi-agent tracking
         if summary.get('persona_counts'):
             persona_str = ", ".join(f"{k} ({v}x)" for k, v in summary['persona_counts'].items())
             print(f"  Personas: {persona_str}")

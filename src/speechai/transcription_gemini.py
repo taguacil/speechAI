@@ -1,7 +1,6 @@
 """Gemini-based transcription with native audio input.
 
-Uses Gemini 2.0 Flash via LiteLLM for combined transcription + analysis
-in a single call, potentially reducing latency.
+Uses Gemini 2.0 Flash via LiteLLM for transcription.
 """
 
 import base64
@@ -11,7 +10,6 @@ import threading
 import time
 import wave
 from collections.abc import Callable
-from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
@@ -20,37 +18,27 @@ import webrtcvad
 
 import openai
 
-
-@dataclass
-class GeminiTranscriptResult:
-    """Result from Gemini transcription."""
-
-    text: str
-    is_final: bool
-    speaker_id: str
-    latency_ms: float
+from speechai.transcription import TranscriptResult
 
 
 class GeminiTranscriber:
-    """Real-time transcription using Gemini 2.0 Flash with native audio.
+    """Real-time transcription using Gemini with native audio.
 
     Uses Voice Activity Detection (VAD) to buffer audio during speech
     and sends chunks to Gemini when silence is detected.
-
-    This combines transcription + sentiment analysis in one LLM call.
     """
 
     # Audio settings (WebRTC VAD requires specific formats)
-    SAMPLE_RATE = 16000  # 16kHz required by WebRTC VAD
+    SAMPLE_RATE = 16000
     CHANNELS = 1
-    FRAME_DURATION_MS = 30  # 10, 20, or 30ms for WebRTC VAD
+    FRAME_DURATION_MS = 30
     FRAME_SIZE = int(SAMPLE_RATE * FRAME_DURATION_MS / 1000)
 
     # VAD settings
-    VAD_MODE = 3  # 0-3, higher = more aggressive filtering
-    SILENCE_THRESHOLD_MS = 500  # Silence duration to trigger send
-    MIN_SPEECH_MS = 300  # Minimum speech duration to process
-    MAX_BUFFER_MS = 10000  # Maximum buffer before forced send
+    VAD_MODE = 3
+    SILENCE_THRESHOLD_MS = 500
+    MIN_SPEECH_MS = 300
+    MAX_BUFFER_MS = 10000
 
     USER_PROMPT = """Transcribe this audio exactly. Respond with ONLY the transcription text, nothing else."""
 
@@ -64,7 +52,6 @@ class GeminiTranscriber:
         self.model = model or os.getenv("GEMINI_MODEL", "gemini-2.0-flash-vertex")
         self.api_key = api_key or os.getenv("LITELLM_API_KEY", "sk-1234")
 
-        # OpenAI client for LiteLLM proxy
         self._client = openai.OpenAI(
             api_key=self.api_key,
             base_url=self.base_url,
@@ -76,17 +63,12 @@ class GeminiTranscriber:
         self._silence_frames = 0
         self._speech_frames = 0
 
-        self._on_result: Callable[[GeminiTranscriptResult], None] | None = None
+        self._on_result: Callable[[TranscriptResult], None] | None = None
         self._running = False
         self._stream: sd.InputStream | None = None
-        self._process_thread: threading.Thread | None = None
 
-    def start(self, on_result: Callable[[GeminiTranscriptResult], None]) -> None:
-        """Start listening and processing audio.
-
-        Args:
-            on_result: Callback for transcription + analysis results.
-        """
+    def start(self, on_result: Callable[[TranscriptResult], None]) -> None:
+        """Start listening and processing audio."""
         self._on_result = on_result
         self._running = True
         self._audio_buffer = []
@@ -94,7 +76,6 @@ class GeminiTranscriber:
         self._silence_frames = 0
         self._speech_frames = 0
 
-        # Start audio stream
         self._stream = sd.InputStream(
             samplerate=self.SAMPLE_RATE,
             channels=self.CHANNELS,
@@ -117,10 +98,8 @@ class GeminiTranscriber:
         if not self._running:
             return
 
-        # Convert to bytes for VAD
         audio_bytes = indata.tobytes()
 
-        # Check if speech is detected
         try:
             is_speech = self._vad.is_speech(audio_bytes, self.SAMPLE_RATE)
         except Exception:
@@ -134,17 +113,14 @@ class GeminiTranscriber:
         else:
             if self._is_speaking:
                 self._silence_frames += 1
-                self._audio_buffer.append(audio_bytes)  # Include trailing silence
+                self._audio_buffer.append(audio_bytes)
 
-                # Check if silence threshold reached
                 silence_ms = self._silence_frames * self.FRAME_DURATION_MS
                 speech_ms = self._speech_frames * self.FRAME_DURATION_MS
 
                 if silence_ms >= self.SILENCE_THRESHOLD_MS and speech_ms >= self.MIN_SPEECH_MS:
-                    # Send buffer for processing
                     self._process_buffer()
 
-        # Force send if buffer too large
         buffer_ms = len(self._audio_buffer) * self.FRAME_DURATION_MS
         if buffer_ms >= self.MAX_BUFFER_MS:
             self._process_buffer()
@@ -154,14 +130,12 @@ class GeminiTranscriber:
         if not self._audio_buffer or not self._on_result:
             return
 
-        # Capture buffer and reset
         audio_data = b"".join(self._audio_buffer)
         self._audio_buffer = []
         self._is_speaking = False
         self._silence_frames = 0
         self._speech_frames = 0
 
-        # Process in background thread to not block audio callback
         thread = threading.Thread(
             target=self._send_to_gemini,
             args=(audio_data,),
@@ -174,26 +148,18 @@ class GeminiTranscriber:
         start = time.perf_counter()
 
         try:
-            # Convert to WAV format
             wav_base64 = self._audio_to_wav_base64(audio_data)
 
-            # Call Gemini with audio using OpenAI-compatible format
             response = self._client.chat.completions.create(
                 model=self.model,
                 messages=[
                     {
                         "role": "user",
                         "content": [
-                            {
-                                "type": "text",
-                                "text": self.USER_PROMPT,
-                            },
+                            {"type": "text", "text": self.USER_PROMPT},
                             {
                                 "type": "input_audio",
-                                "input_audio": {
-                                    "data": wav_base64,
-                                    "format": "wav",
-                                },
+                                "input_audio": {"data": wav_base64, "format": "wav"},
                             },
                         ],
                     },
@@ -213,33 +179,28 @@ class GeminiTranscriber:
     def _audio_to_wav_base64(self, audio_data: bytes) -> str:
         """Convert raw PCM audio to base64-encoded WAV."""
         buffer = io.BytesIO()
-
         with wave.open(buffer, "wb") as wav_file:
             wav_file.setnchannels(self.CHANNELS)
-            wav_file.setsampwidth(2)  # 16-bit = 2 bytes
+            wav_file.setsampwidth(2)
             wav_file.setframerate(self.SAMPLE_RATE)
             wav_file.writeframes(audio_data)
-
         buffer.seek(0)
         return base64.b64encode(buffer.read()).decode("utf-8")
 
-    def _parse_response(
-        self, response: Any, latency_ms: float
-    ) -> GeminiTranscriptResult | None:
+    def _parse_response(self, response: Any, latency_ms: float) -> TranscriptResult | None:
         """Parse Gemini transcription response."""
         try:
             text = response.choices[0].message.content.strip()
-
             if not text:
                 return None
 
-            return GeminiTranscriptResult(
+            return TranscriptResult(
                 text=text,
                 is_final=True,
-                speaker_id="Speaker",  # Gemini doesn't diarize by default
+                speaker_id="Speaker",
+                offset_ms=0,
                 latency_ms=latency_ms,
             )
-
         except (AttributeError, IndexError) as e:
             print(f"[Gemini] Parse error: {e}")
             return None

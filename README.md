@@ -1,24 +1,58 @@
 # SpeechAI
 
-Real-time speech sentiment analysis for sales assistants. Transcribes live audio, analyzes sentiment, and provides actionable coaching suggestions in real-time.
+Real-time speech analysis for CEAT tyre sales assistants. Transcribes live audio, analyzes customer sentiment and persona, detects competitor mentions, and provides actionable coaching suggestions in real-time.
 
 ## Features
 
 - **Real-time transcription** with Azure Speech or Gemini 2.0 Flash
-- **Sentiment analysis** (positive/negative/neutral) with confidence scores
-- **Signal detection** (objections, interest, budget concerns, etc.)
-- **Actionable suggestions** for sales reps in real-time
+- **Multi-agent analysis** running in parallel for low latency:
+  - Sentiment analysis with confidence scores and signal detection
+  - Persona inference (6 CEAT customer personas)
+  - Product analysis with upsell opportunity detection
+  - Competitor intelligence with counter-positioning
+  - Contextual sales scripts and objection handlers
+- **Actionable suggestions** consolidated from all agents (2-3 bullets max)
 - **Conversation context** tracking throughout the session
-- **Session management** with reset and mute controls
+- **Per-agent model configuration** for optimal performance
 
 ## Architecture
 
 ```
-Microphone → Transcription → Parallel Agents → Consolidator → Display
-                                    │
-                                    ├── Sentiment Agent
-                                    └── (extensible for more agents)
+Microphone → Transcription → Parallel Agents ──────────────────→ Consolidator → Display
+                                    │                                   │
+                                    ├── Sentiment Agent (gpt-5-mini)    │
+                                    ├── Persona Agent (gpt-5-mini)      │
+                                    ├── Product Agent (gpt-5-mini)      ├→ 2-3 Suggestions
+                                    ├── Competition Agent (gpt-5-mini)  │
+                                    └── Sales Prompts Agent (haiku)     │
+                                                                        ↓
+                                                            claude-haiku-4-5
 ```
+
+### Agent Overview
+
+| Agent | Purpose | Default Model |
+|-------|---------|---------------|
+| **Sentiment** | Detects positive/negative/neutral sentiment with signals | gpt-5-mini |
+| **Persona** | Infers customer persona from 6 CEAT segments | gpt-5-mini |
+| **Product** | Identifies products mentioned, upsell opportunities | gpt-5-mini |
+| **Competition** | Detects competitor mentions, provides counter-positioning | gpt-5-mini |
+| **Sales Prompts** | Retrieves contextual scripts and objection handlers | claude-haiku-4-5 |
+| **Consolidator** | Combines all outputs into 2-3 actionable suggestions | claude-haiku-4-5 |
+
+### CEAT Domain Knowledge
+
+**6 Customer Personas:**
+- Entitled Evan (premium demanding)
+- Impatient Ashish (time-sensitive)
+- Pragmatic Purnima (safety/hassle-free)
+- Thorough Tushar (research-oriented)
+- Savvy Sarabh (value-seeking)
+- Bindaas Bharat (durability-focused)
+
+**8 CEAT Products:** SportDrive SUV CALM, SportDrive, CrossDrive AT, SecuraDrive SUV, SecuraDrive, Energy Drive, Milaze X5, Milaze X3
+
+**6 Competitors Tracked:** MRF, Apollo, JK Tyre, Bridgestone, Michelin, Goodyear
 
 ## Installation
 
@@ -54,16 +88,37 @@ Create a `.env` file with your credentials:
 AZURE_SPEECH_KEY=your_key
 AZURE_SPEECH_ENDPOINT=your_endpoint
 
-# LiteLLM proxy (for Gemini mode)
+# LiteLLM proxy (agents use this)
 LITELLM_BASE_URL=http://localhost:4000
 LITELLM_API_KEY=sk-1234
-GEMINI_MODEL=gemini-2.0-flash-vertex
 
-# LLM for agents (sentiment, consolidator)
-LLM_BASE_URL=http://localhost:4000
-LLM_API_KEY=sk-1234
-LLM_MODEL=your-model
+# Gemini transcription (for Gemini mode)
+GEMINI_MODEL=vertex_ai/gemini-2.0-flash
 ```
+
+### Per-Agent Model Configuration
+
+Each agent has a default model optimized for its task. Override via environment variables:
+
+```bash
+# JSON output agents (reliable structured output)
+LITELLM_MODEL_SENTIMENT=gpt-5-mini
+LITELLM_MODEL_PERSONA=gpt-5-mini
+LITELLM_MODEL_PRODUCT=gpt-5-mini
+LITELLM_MODEL_COMPETITION=gpt-5-mini
+
+# Tone-sensitive agents (customer-facing scripts)
+LITELLM_MODEL_SALES_PROMPTS=claude-haiku-4.5
+LITELLM_MODEL_CONSOLIDATOR=claude-haiku-4.5
+```
+
+**Model recommendations:**
+| Model | Best For |
+|-------|----------|
+| `gpt-5-mini` | Reliable JSON output, structured data extraction |
+| `gemini-2.5-flash-lite` | Large context, cost-effective |
+| `deepseek-v3.1` | Strong reasoning, cost-effective |
+| `claude-haiku-4-5` | Natural conversational tone, customer-facing text |
 
 ## Usage
 
@@ -229,13 +284,21 @@ technical term
 ## Output Example
 
 ```
-[14:23:45] Speaker-1 │ NEGATIVE (85%)
-  "That's more than we budgeted for this quarter"
-  Signals: price objection
+[14:23:45] Customer │ INTERESTED (78%) │ Pragmatic Purnima
+  "I'm looking for tyres for my Innova. Safety is important, we do a lot of highway driving.
+   But I've heard MRF is more durable..."
+
   Suggestions:
-    → Acknowledge budget concern directly
-    → Ask about their timeline flexibility
-  [Azure STT: 1250ms | Agents: 487ms | Total: 1737ms]
+    → Recommend SecuraDrive SUV - excellent wet grip for highway safety
+    → Counter MRF: "CEAT offers similar durability with CALM noise reduction technology"
+    → Mention run-flat capability for highway peace of mind
+
+  Persona: Pragmatic Purnima (safety-focused, hassle-free)
+  Products: SecuraDrive SUV, Run-flat option
+  Competitor: MRF mentioned
+  Upsell: Run-flat tyres (highway safety trigger)
+
+  [Azure STT: 1250ms | 5 Agents: 487ms | Consolidator: 312ms | Total: 2049ms]
 ```
 
 ## Session Summary
@@ -249,6 +312,10 @@ Session Summary:
   Duration: 145s
   Sentiment: {'positive': 4, 'negative': 3, 'neutral': 5}
   Signals: {'budget': 2, 'interest': 3, 'objection': 1}
+  Personas detected: Pragmatic Purnima (7x), Thorough Tushar (3x)
+  Products discussed: SecuraDrive SUV, SportDrive
+  Competitors mentioned: MRF (2x), Apollo (1x)
+  Upsell opportunities: run_flat, calm_technology
 ────────────────────────────────────
 ```
 
@@ -256,7 +323,7 @@ Session Summary:
 
 ```
 ├── data/
-│   ├── phrases.txt          # Phrase list for recognition
+│   ├── phrases.txt          # Phrase list for recognition (70+ CEAT terms)
 │   ├── transcripts/         # JSON files from Azure Speech
 │   ├── translations/        # Formatted English transcripts
 │   └── analysis/            # Analysis JSON + reports
@@ -269,33 +336,64 @@ Session Summary:
     ├── main.py              # Azure mode entry point
     ├── main_gemini.py       # Gemini mode entry point
     ├── main_file.py         # File processing entry point
-    ├── assistant_base.py    # Shared assistant logic
+    ├── assistant_base.py    # Shared assistant logic + orchestrator
     ├── display.py           # Terminal output formatting
     ├── context.py           # Conversation context tracking
     ├── transcription.py     # Azure Speech transcriber
     ├── transcription_gemini.py  # Gemini transcriber
     ├── transcription_file.py    # File-based transcription
-    ├── prompts.yaml         # Agent prompts configuration
+    ├── prompts.yaml         # Agent prompts + CEAT domain knowledge
     └── agents/
-        ├── base.py          # Base agent class
-        ├── sentiment.py     # Sentiment analysis agent
-        └── consolidator.py  # Suggestion consolidator
+        ├── __init__.py      # Exports all agents and constants
+        ├── base.py          # BaseAgent with per-agent model config
+        ├── sentiment.py     # Sentiment + signal detection
+        ├── persona.py       # 6 CEAT personas with triggers
+        ├── product.py       # CEAT products + upsell toolkit
+        ├── competition.py   # Competitor intelligence database
+        ├── sales_prompts.py # Upsell scripts + objection handlers
+        └── consolidator.py  # Consolidator + AgentOrchestrator
 ```
 
 ## Extending
 
 ### Adding New Agents
 
-1. Create a new agent in `src/speechai/agents/`
-2. Inherit from `BaseAgent`
-3. Add to the orchestrator in `consolidator.py`
+1. Create a new agent in `src/speechai/agents/`:
+   ```python
+   from speechai.agents.base import AgentResult, BaseAgent
+
+   class MyAgent(BaseAgent):
+       name = "my_agent"
+       default_model = "gpt-5-mini"  # or claude-haiku-4-5 for tone
+
+       async def analyze(self, text: str, context: dict | None = None) -> AgentResult:
+           # Your analysis logic
+           return AgentResult(agent_name=self.name, success=True, data={...}, latency_ms=0)
+   ```
+2. Add to `AgentOrchestrator.initialize()` in `consolidator.py`
+3. Include in `asyncio.gather()` call in `AgentOrchestrator.process()`
+4. Update `Consolidator.analyze()` to use new agent's output
+5. Add prompts to `prompts.yaml` under your agent's name
 
 ### Customizing Prompts
 
 Edit `src/speechai/prompts.yaml` to customize:
-- Sentiment detection criteria
-- Suggestion generation rules
-- Signal keywords
+- Sentiment detection criteria and signal keywords
+- Persona triggers and characteristics
+- Product catalog and upsell triggers
+- Competitor counter-positioning
+- Sales scripts and objection handlers
+- Consolidator suggestion generation rules
+
+### Embedded Domain Knowledge
+
+Each agent embeds CEAT-specific knowledge as fallback:
+- `persona.py`: `PERSONAS` dict with 6 customer segments
+- `product.py`: `CEAT_PRODUCTS` and `UPSELL_TOOLKIT`
+- `competition.py`: `COMPETITORS` and `CEAT_DIFFERENTIATORS`
+- `sales_prompts.py`: `UPSELL_SCRIPTS` and `OBJECTION_HANDLERS`
+
+This ensures agents can detect triggers even if LLM parsing fails.
 
 ## License
 

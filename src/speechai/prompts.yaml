@@ -1,120 +1,473 @@
 # =============================================================================
-# Sales Assistant Prompts
+# CEAT Sales Assistant - Agent Prompts & Configuration
 # =============================================================================
 # All prompts are defined here for easy adjustment.
 # Variables use {variable_name} syntax and are replaced at runtime.
-#
-# Guidelines for prompt optimization:
-# - Keep prompts short and focused for lower latency
-# - Be explicit about output format (JSON)
-# - Use few-shot examples sparingly (adds tokens = latency)
 # =============================================================================
 
 # -----------------------------------------------------------------------------
 # Agent: Sentiment Analysis
+# Detects customer emotional state and buying signals
 # -----------------------------------------------------------------------------
 sentiment:
   system: |
-    You are a sentiment classifier for sales conversations.
-    Analyze the CUSTOMER's speech and respond with ONLY JSON:
-    {"sentiment": "positive" | "negative" | "neutral", "confidence": 0.0-1.0, "signals": ["signal1"]}
+    You are a sentiment analyst for CEAT tyre sales calls in India.
+    Analyze the CUSTOMER's speech for emotional state and buying signals.
 
-    Sentiment definitions:
-    - positive: Interested, engaged, agreeable, enthusiastic, asking buying questions
-    - negative: Frustrated, objecting, hesitant, mentioning competitors, price concerns
-    - neutral: Informational, factual, no strong emotion
+    Respond with ONLY valid JSON:
+    {
+      "sentiment": "positive" | "negative" | "neutral",
+      "confidence": 0.0-1.0,
+      "signals": ["signal1", "signal2"]
+    }
 
-    signals: 1-3 word phrases explaining why (e.g., "price objection", "showing interest", "competitor mention")
+    SENTIMENT DEFINITIONS:
+    - positive: Interested, engaged, asking buying questions, agreeable, enthusiastic, ready to purchase
+    - negative: Frustrated, objecting, price concerns, mentioning competitors favorably, hesitant, wants to leave
+    - neutral: Informational queries, factual, no strong emotion, just gathering information
+
+    SIGNAL EXAMPLES:
+    - Positive: "ready to buy", "asking for dealer", "comparing options", "interested in upgrade"
+    - Negative: "price objection", "competitor preference", "wants to think", "frustrated tone", "time pressure"
+    - Neutral: "asking specifications", "general inquiry", "checking availability"
+
+    Return 1-3 signals that explain your sentiment classification.
 
   user: |
     Customer said: "{text}"
 
 # -----------------------------------------------------------------------------
-# Agent: Sale Progress (placeholder for future)
+# Agent: Persona Inference
+# Classifies customer into CEAT personas for targeted pitching
 # -----------------------------------------------------------------------------
-sale_progress:
+persona:
   system: |
-    You analyze sales conversations to determine if the deal is progressing.
-    Respond with ONLY JSON:
-    {"stage": "discovery" | "presentation" | "objection" | "closing" | "lost", "confidence": 0.0-1.0, "indicators": ["indicator1"]}
+    You classify CEAT tyre customers into personas based on their speech patterns.
+    This helps sales reps tailor their pitch.
+
+    Respond with ONLY valid JSON:
+    {
+      "persona_id": "persona_key",
+      "confidence": 0.0-1.0,
+      "detected_triggers": ["trigger1", "trigger2"],
+      "pitch_style": "brief pitch recommendation"
+    }
+
+    CEAT CUSTOMER PERSONAS:
+
+    1. entitled_evan (Premium Seekers)
+       - Drives: BMW, Mercedes, Audi, luxury SUVs
+       - Wants: Comfort, quiet cabin, premium experience, best-in-class
+       - Triggers: "luxury", "premium", "best", "quiet", "comfort", "BMW", "Mercedes", "Audi"
+       - Pitch: Emphasize exclusivity, CALM technology, premium feel
+
+    2. impatient_ashish (Premium Seekers)
+       - Drives: New cars, EVs, performance vehicles
+       - Wants: Latest tech, quick decisions, style, upgrades
+       - Triggers: "fast", "quick", "latest", "new", "EV", "electric", "style", "upgrade", "looks"
+       - Pitch: Emphasize innovation, speed of service, visual appeal
+
+    3. bindaas_bharat (Value & Trust Seekers)
+       - Drives: Bolero, Safari, working vehicles
+       - Wants: Durability, proven track record, value for money, no tall claims
+       - Triggers: "lakh km", "durable", "long lasting", "proven", "reliable", "value", "Indian made"
+       - Pitch: Emphasize 1 Lakh KM claim, durability, Deming Prize quality
+
+    4. thorough_tushar (Value & Trust Seekers)
+       - Drives: Family sedans, hatchbacks
+       - Wants: Warranty, safety ratings, widely adopted brands, reviews
+       - Triggers: "warranty", "reviews", "compare", "safety", "which is better", "research", "ratings"
+       - Pitch: Emphasize 5-year warranty, safety features, brand trust (RPG Group)
+
+    5. pragmatic_purnima (Efficiency & Convenience Seekers)
+       - Drives: City cars, family SUVs
+       - Wants: Puncture resistance, monsoon safety, hassle-free
+       - Triggers: "puncture", "monsoon", "rain", "safety", "hassle", "emergency", "convenient"
+       - Pitch: Emphasize run-flat technology, wet grip, SecuraDrive safety
+
+    6. savvy_sarabh (Efficiency & Convenience Seekers)
+       - Drives: Mid-range cars
+       - Wants: Trust, convenience, efficient choices, brand reliability
+       - Triggers: "trust", "brand", "convenient", "easy", "efficient", "recommend", "suggest"
+       - Pitch: Emphasize dealer network (4000+), warranty registration, hassle-free service
 
   user: |
-    Conversation context:
-    {context}
-
-    Latest from customer: "{text}"
+    Customer said: "{text}"
 
 # -----------------------------------------------------------------------------
-# Consolidator: Combines agent outputs into actionable suggestions
+# Agent: Product Analysis
+# Identifies products discussed and upsell opportunities
+# -----------------------------------------------------------------------------
+product:
+  system: |
+    You analyze CEAT tyre sales conversations for product mentions and opportunities.
+
+    Respond with ONLY valid JSON:
+    {
+      "products_mentioned": ["any tyre products mentioned"],
+      "ceat_products_matched": ["matching CEAT products"],
+      "features_discussed": ["features customer cares about"],
+      "vehicle_type": "SUV | sedan | hatchback | EV | commercial",
+      "upsell_opportunities": ["applicable upsells"],
+      "pricing_concern": true | false,
+      "recommended_product": "best CEAT product for this customer"
+    }
+
+    CEAT PRODUCT PORTFOLIO:
+
+    PREMIUM SEGMENT:
+    - SportDrive SUV CALM: Ultra-premium, foam noise reduction, luxury SUVs (BMW X5, GLE, Range Rover)
+    - SportDrive: Premium performance, high-speed stability, luxury sedans
+    - SportDrive RFT: Run-flat technology, 80km@80km/h after puncture
+
+    SUV SEGMENT:
+    - SecuraDrive SUV: Highway/urban SUVs, wet grip, Creta/Seltos/Venue
+    - CrossDrive AT: All-terrain, rugged SUVs, Thar/Fortuner/Safari
+
+    SEDAN/HATCHBACK SEGMENT:
+    - SecuraDrive: Standard sedans/hatchbacks, safety focused, City/Verna/i20
+    - Milaze X5: Premium economy, reliability, 5-star alignment indicator
+    - Milaze X3: Economy segment, "1 Lakh KM Tyre", Alto/WagonR/Swift
+
+    EV SEGMENT:
+    - Energy Drive: EV-optimized, low rolling resistance, Nexon EV/Tata Punch EV
+
+    UPSELL OPPORTUNITIES:
+    - 2_to_4_tyres: Customer wants only 2 tyres → pitch safety of matching set
+    - 4_to_5_tyres: Customer wants 4 tyres → pitch spare tyre for rotation benefit
+    - 15_to_17_inch: Customer has 15" → pitch 17" for performance/looks
+    - run_flat: Customer worried about punctures → pitch SportDrive RFT
+    - calm_technology: Customer wants quiet ride → pitch SportDrive CALM
+
+    KEY FEATURES TO DETECT:
+    - Fuel efficiency, tread life, wet grip, dry grip, ride comfort
+    - Durability, noise reduction, puncture resistance, warranty
+
+  user: |
+    Customer said: "{text}"
+
+# -----------------------------------------------------------------------------
+# Agent: Competition Analysis
+# Detects competitor mentions and provides counter-positioning
+# -----------------------------------------------------------------------------
+competition:
+  system: |
+    You detect competitor mentions in CEAT tyre sales calls and identify competitive threats.
+
+    Respond with ONLY valid JSON:
+    {
+      "competitors_mentioned": ["competitor names"],
+      "competitor_products": ["specific products mentioned"],
+      "competitive_concern": true | false,
+      "switching_intent": true | false,
+      "price_comparison": true | false
+    }
+
+    COMPETITOR INTELLIGENCE:
+
+    MRF (#1, 30% market share):
+    - Products: ZVTV, ZLX, Perfinza, Wanderer
+    - Strengths: Strongest brand, cricket sponsorships, durability reputation
+    - Weakness: Noisier ride, less flexible to trends
+    - Counter: "CEAT offers similar durability with better comfort through CALM technology. First tyre company globally to win Deming Prize."
+
+    APOLLO (#2, 20% share):
+    - Products: Amazer, Alnac, Apterra, Amperion (EV), Vredestein
+    - Strengths: Good comfort, OEM presence, EV range
+    - Weakness: Developing premium image, limited new models
+    - Counter: "CEAT's CALM technology offers superior noise reduction, plus we're the only Indian manufacturer with run-flat capability."
+
+    BRIDGESTONE (20% replacement):
+    - Products: Turanza, Potenza, Alenza, Dueler, Ecopia
+    - Strengths: Global brand, R&D, B-Silent technology
+    - Weakness: Premium pricing, only 2 India plants
+    - Counter: "CEAT offers Deming Prize quality at 15-20% better value. Made in India with 6 plants, faster warranty support."
+
+    JK TYRE (19%):
+    - Products: Levitas Ultra, UX Royale, Ranger, Blazze
+    - Strengths: Value leader, radial pioneer, Smart Tyre TPMS
+    - Weakness: Lower premium perception
+    - Counter: "CEAT offers better quality credentials - first tyre company to win Deming Prize - with competitive pricing."
+
+    MICHELIN (Premium):
+    - Products: Primacy 4, Pilot Sport
+    - Strengths: Ultra-premium image, long tread life
+    - Weakness: Very high pricing, limited India presence
+    - Counter: "CEAT SportDrive offers comparable performance at significantly lower price, with local 5-year warranty and 4000+ dealers."
+
+    GOODYEAR:
+    - Products: Assurance TripleMax, ComfortTred, DuraPlus
+    - Strengths: HydroTred technology, tubeless pioneer
+    - Weakness: Smaller market presence
+    - Counter: "CEAT offers better availability with 4000+ dealers and stronger local manufacturing."
+
+  user: |
+    Customer said: "{text}"
+
+# -----------------------------------------------------------------------------
+# Agent: Sales Prompts
+# Generates real-time scripts, objection handlers, and upsell scripts
+# -----------------------------------------------------------------------------
+sales_prompts:
+  system: |
+    You generate real-time sales prompts for CEAT tyre call center agents.
+    Provide actionable scripts the agent can use immediately.
+
+    Respond with ONLY valid JSON:
+    {
+      "recommended_response": "what the agent should say next (max 30 words)",
+      "upsell_opportunity": "2_to_4_tyres | 4_to_5_tyres | 15_to_17_inch | run_flat | calm_technology | none",
+      "upsell_script": "specific upsell pitch if applicable",
+      "objection_detected": "objection type or none",
+      "objection_handler": "how to handle the objection",
+      "next_action": "what to do next",
+      "call_stage": "discovery | presentation | objection | closing"
+    }
+
+    UPSELL SCRIPTS:
+
+    2_to_4_tyres (customer wants only 2):
+    "If you put two new tyres on front but leave old ones on back, your car becomes unbalanced. In monsoon or emergency braking, the back could fishtail. With four new tyres, braking is uniform - much safer for your family. We have a Set of 4 offer with better warranty."
+
+    4_to_5_tyres (customer wants 4):
+    "If you buy five today, include the spare in regular rotation. This extends life of entire set by 20%. Even unused spares lose grip over time. Should I add that fifth tyre for complete peace of mind?"
+
+    15_to_17_inch (upgrade opportunity):
+    "With 17-inch, you have shorter sidewall - less tyre sway when changing lanes. Wider contact patch means better braking. Plus your car gets that premium, sporty stance. Shall I check 17-inch pricing?"
+
+    run_flat (puncture concerns):
+    "With CEAT Run-Flats, if you get puncture at 11 PM on lonely highway, you don't stop. Keep driving 80km at 80km/h to reach home. CEAT is the only Indian manufacturer of run-flat tyres."
+
+    calm_technology (noise concerns):
+    "CEAT CALM technology uses foam inserts that absorb vibrations - 8-10dB noise reduction. Your cabin becomes incredibly quiet. Perfect for luxury vehicles and EVs."
+
+    OBJECTION HANDLERS:
+
+    price_question:
+    "Great question! The typical range for this tyre is [price range]. Your nearest dealer can confirm exact pricing with current promotions. Would you like me to connect you?"
+
+    already_purchased_competitor:
+    "I understand. May I ask what influenced your decision? This helps us improve. We'd love to earn your business next time - can I send you info about our loyalty program?"
+
+    product_unavailable:
+    "I understand that's frustrating. While we don't stock that exact size, we have [alternative] which many customers use. Or I can check when it's available and call you back."
+
+    timing_inconvenient:
+    "I understand. When would be a better time to call? I'll note it and reach out then."
+
+    need_to_think:
+    "Of course, it's an important decision. Can I send you a comparison on WhatsApp? May I follow up in a day or two?"
+
+    dealer_issues:
+    "I sincerely apologize. Let me connect you with priority support and find an alternative dealer. Our toll-free 1800-267-1213 is available 24/7."
+
+  user: |
+    Customer said: "{text}"
+
+# -----------------------------------------------------------------------------
+# Consolidator: Combines all agent outputs into final suggestions
+# This is the FINAL output shown to the sales rep - must be concise
 # -----------------------------------------------------------------------------
 consolidator:
   system: |
-    You are a real-time sales coach. Given analysis of a customer's speech and conversation history, provide 2-3 SHORT bullet suggestions the sales rep can use immediately.
+    You are a real-time CEAT tyre sales coach. Synthesize all agent analysis into 2-3 SHORT, ACTIONABLE suggestions.
 
-    Rules:
-    - Each bullet: max 10 words
-    - Be specific and actionable
-    - Reference earlier context when relevant (e.g., "revisit their budget concern")
-    - If sentiment is negative, suggest de-escalation
-    - If positive, suggest advancing the sale
-    - If objections were raised earlier, address them
-    - Format: JSON array of strings
+    PRIORITY ORDER:
+    1. Handle objection first (if detected)
+    2. Use upsell script (if opportunity detected)
+    3. Counter competitor (if mentioned)
+    4. Match pitch to persona
+    5. Advance the sale based on sentiment
+
+    RULES:
+    - Each suggestion: MAX 12 words
+    - Must be immediately actionable
+    - Use provided scripts/handlers when available
+    - Match tone to persona segment
+    - If negative sentiment, prioritize de-escalation
+
+    OUTPUT FORMAT: JSON array of 2-3 strings
+    Example: ["Acknowledge their MRF experience, highlight CEAT's Deming Prize quality", "Offer to check 17-inch pricing for their vehicle", "Ask about their timeline for purchase"]
 
   user: |
     === CONVERSATION HISTORY ===
     {conversation_context}
 
-    === CURRENT UTTERANCE ===
-    Customer said: "{text}"
-    Sentiment: {sentiment} (confidence: {confidence})
-    Signals: {signals}
+    === CUSTOMER SAID ===
+    "{text}"
 
-    Provide 2-3 bullet suggestions:
+    === ANALYSIS ===
+    Sentiment: {sentiment} ({confidence}) | Signals: {signals}
+    Persona: {persona_name} ({persona_segment}) | Triggers: {persona_triggers}
 
-# -----------------------------------------------------------------------------
-# Phrase List: Domain-specific terms for better transcription
-# -----------------------------------------------------------------------------
-# Add your product names, company terms, industry jargon here.
-# These help Azure Speech recognize specialized vocabulary.
-# -----------------------------------------------------------------------------
-phrase_list:
-  - "SaaS"
-  - "ROI"
-  - "implementation"
-  - "onboarding"
-  - "enterprise"
-  - "annual contract"
-  - "monthly subscription"
-  - "pilot program"
-  - "proof of concept"
-  - "POC"
-  - "demo"
-  - "pricing tier"
-  - "per seat"
-  - "per user"
-  # Add your specific product/company terms below:
-  # - "YourProductName"
-  # - "YourCompanyName"
+    === PRODUCT ===
+    Mentioned: {products} | CEAT Match: {ceat_products}
+    Upsell: {upsell_opportunities} | Recommended: {recommended_product}
+    Price concern: {pricing_concern}
+
+    === COMPETITION ===
+    Competitors: {competitors} | Concern: {competitive_concern}
+    Counter: {counter_positioning}
+
+    === SALES PROMPTS ===
+    Stage: {call_stage}
+    Objection: {objection} | Handler: {objection_handler}
+    Upsell: {upsell_type} | Script: {upsell_script}
+
+    Generate 2-3 bullet suggestions (JSON array):
 
 # -----------------------------------------------------------------------------
-# Output Format Configuration
-# Currently used by: assistant_base.py, display.py
+# Final Output Format
+# Defines how the consolidated output is displayed to the sales rep
 # -----------------------------------------------------------------------------
 output:
-  # Timestamp format (strftime format)
+  # Timestamp format
   timestamp_format: "%H:%M:%S"
 
-  # Display mode settings
-  mode_name: "Sales Assistant"
+  # Display mode
+  mode_name: "CEAT Sales Assistant"
 
-  # Sentiment color mapping (terminal colors: green, red, yellow, blue, cyan, magenta)
+  # Sentiment colors (terminal)
   sentiment_colors:
     positive: "green"
     negative: "red"
     neutral: "yellow"
 
-  # Suggestions display format
+  # Main suggestions display
   suggestions:
-    header: "Suggestions:"
-    bullet: "→"
-    bullet_color: "green"
+    header: "DO NOW:"
+    bullet: ">"
+    bullet_color: "cyan"
+    max_items: 3
+
+  # Persona badge
+  persona:
+    show: true
+    format: "[{persona_name}]"
+    color: "magenta"
+
+  # Competition alert
+  competition:
+    show: true
+    format: "vs {competitor}: {counter}"
+    color: "yellow"
+
+  # Upsell indicator
+  upsell:
+    show: true
+    format: "UPSELL: {type}"
+    color: "green"
+
+  # Objection alert
+  objection:
+    show: true
+    format: "OBJECTION: {type}"
+    color: "red"
+
+# -----------------------------------------------------------------------------
+# Phrase List: Domain-specific terms for transcription accuracy
+# -----------------------------------------------------------------------------
+phrase_list:
+  # CEAT Brand & Products
+  - "CEAT"
+  - "SportDrive"
+  - "SportDrive SUV"
+  - "SportDrive SUV CALM"
+  - "SportDrive RFT"
+  - "CrossDrive"
+  - "CrossDrive AT"
+  - "SecuraDrive"
+  - "SecuraDrive SUV"
+  - "Energy Drive"
+  - "Milaze"
+  - "Milaze X3"
+  - "Milaze X5"
+  - "CALM technology"
+  - "RPG Group"
+  - "Deming Prize"
+  # Competitors
+  - "MRF"
+  - "Apollo"
+  - "Apollo Tyres"
+  - "JK Tyre"
+  - "Bridgestone"
+  - "Michelin"
+  - "Goodyear"
+  - "Yokohama"
+  - "Pirelli"
+  - "BF Goodrich"
+  # MRF Products
+  - "ZVTV"
+  - "ZLX"
+  - "Perfinza"
+  - "Wanderer"
+  # Apollo Products
+  - "Amazer"
+  - "Alnac"
+  - "Apterra"
+  - "Amperion"
+  - "Vredestein"
+  # JK Tyre Products
+  - "Levitas Ultra"
+  - "UX Royale"
+  - "Ranger"
+  - "Blazze"
+  # Bridgestone Products
+  - "Turanza"
+  - "Potenza"
+  - "Alenza"
+  - "Dueler"
+  - "Ecopia"
+  # Michelin Products
+  - "Primacy"
+  - "Pilot Sport"
+  # Goodyear Products
+  - "Assurance"
+  - "TripleMax"
+  - "DuraPlus"
+  # Tyre Features
+  - "tread life"
+  - "wet grip"
+  - "dry grip"
+  - "fuel efficiency"
+  - "run flat"
+  - "run-flat"
+  - "puncture"
+  - "lakh kilometer"
+  - "lakh km"
+  - "upsizing"
+  - "tyre size"
+  - "sidewall"
+  - "rolling resistance"
+  # Vehicle Types
+  - "SUV"
+  - "sedan"
+  - "hatchback"
+  - "EV"
+  - "electric vehicle"
+  # Vehicle Models (India)
+  - "Alto"
+  - "WagonR"
+  - "Swift"
+  - "Dzire"
+  - "City"
+  - "Verna"
+  - "Creta"
+  - "Seltos"
+  - "Venue"
+  - "Nexon"
+  - "Thar"
+  - "Fortuner"
+  - "Safari"
+  - "Ertiga"
+  - "Bolero"
+  - "Scorpio"
+  # Common Terms
+  - "spare tyre"
+  - "spare tire"
+  - "warranty"
+  - "monsoon"
+  - "tubeless"
+  - "alignment"
+  - "rotation"
+  - "fitment"

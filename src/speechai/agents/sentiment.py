@@ -30,6 +30,7 @@ class SentimentAgent(BaseAgent):
     """Agent for real-time sentiment analysis of customer speech."""
 
     name = "sentiment"
+    default_model = "gpt-5-mini"  # Reliable JSON output
 
     async def analyze(self, text: str, context: dict[str, Any] | None = None) -> AgentResult:
         """Analyze sentiment of customer speech.

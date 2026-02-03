@@ -73,6 +73,11 @@ async def process_file(
         sentiment=output.sentiment,
         confidence=output.confidence,
         signals=output.signals,
+        # Multi-agent outputs
+        persona_name=output.persona_name,
+        products_mentioned=output.products_mentioned,
+        competitors_mentioned=output.competitors_mentioned,
+        upsell_opportunities=output.upsell_opportunities,
     )
 
     # Display results
@@ -93,6 +98,16 @@ async def process_file(
         agents_latency_ms=output.total_latency_ms,
         mode_color=mode_color,
         stt_label=stt_label,
+        # Multi-agent outputs
+        persona_name=output.persona_name,
+        persona_segment=output.persona_segment,
+        products_mentioned=output.products_mentioned,
+        upsell_opportunities=output.upsell_opportunities,
+        recommended_product=output.recommended_product,
+        competitors_mentioned=output.competitors_mentioned,
+        counter_positioning=output.counter_positioning,
+        objection_detected=output.objection_detected,
+        upsell_script=output.upsell_script,
     )
 
 
@@ -170,6 +185,17 @@ def main() -> None:
         print(f"  Sentiment: {summary['sentiment_distribution']}")
         if summary['signal_counts']:
             print(f"  Signals: {summary['signal_counts']}")
+        # Multi-agent tracking
+        if summary.get('persona_counts'):
+            persona_str = ", ".join(f"{k} ({v}x)" for k, v in summary['persona_counts'].items())
+            print(f"  Personas: {persona_str}")
+        if summary.get('products_discussed'):
+            print(f"  Products: {', '.join(summary['products_discussed'][:5])}")
+        if summary.get('competitor_counts'):
+            comp_str = ", ".join(f"{k} ({v}x)" for k, v in summary['competitor_counts'].items())
+            print(f"  Competitors: {comp_str}")
+        if summary.get('upsell_opportunities'):
+            print(f"  Upsells: {', '.join(summary['upsell_opportunities'][:3])}")
         print(f"{Colors.DIM}{'─' * 40}{Colors.RESET}")
 
     print(f"\n{Colors.DIM}Done.{Colors.RESET}")

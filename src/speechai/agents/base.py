@@ -26,9 +26,15 @@ class BaseAgent(ABC):
     - Structured JSON output
     - No retries (fail fast)
     - Async execution
+    - Per-agent model selection for optimal performance
     """
 
     name: str = "base"
+    max_tokens: int = 500  # Generous default, final output is filtered for conciseness
+
+    # Model presets - override in subclasses or via env vars
+    # JSON agents use reliable JSON model, customer-facing use best-tone model
+    default_model: str = "gpt-5-mini"  # Override per agent
 
     def __init__(
         self,
@@ -39,7 +45,8 @@ class BaseAgent(ABC):
     ):
         self.prompts = prompts
         self.base_url = base_url or os.getenv("LITELLM_BASE_URL", "http://localhost:4000")
-        self.model = model or os.getenv("LITELLM_MODEL", "azure/gpt-4o-mini")
+        # Priority: explicit param > agent-specific env var > agent default > global default
+        self.model = model or os.getenv(f"LITELLM_MODEL_{self.name.upper()}", self.default_model)
         self.api_key = api_key or os.getenv("LITELLM_API_KEY", "sk-1234")
 
     @abstractmethod
@@ -70,7 +77,7 @@ class BaseAgent(ABC):
                     {"role": "user", "content": user_prompt},
                 ],
                 temperature=0,
-                max_tokens=100,  # Keep responses short for speed
+                max_tokens=self.max_tokens,
             )
             return response.choices[0].message.content.strip()
         except Exception as e:

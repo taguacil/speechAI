@@ -109,6 +109,16 @@ def format_output(
     agents_latency_ms: float,
     mode_color: str = Colors.BLUE,
     stt_label: str = "STT",
+    # New multi-agent outputs (optional for backward compatibility)
+    persona_name: str = "",
+    persona_segment: str = "",
+    products_mentioned: list[str] | None = None,
+    upsell_opportunities: list[str] | None = None,
+    recommended_product: str = "",
+    competitors_mentioned: list[str] | None = None,
+    counter_positioning: str = "",
+    objection_detected: str = "",
+    upsell_script: str = "",
 ) -> None:
     """Format and print the analysis output.
 
@@ -124,16 +134,28 @@ def format_output(
         agents_latency_ms: Agent processing latency.
         mode_color: Color for latency display.
         stt_label: Label for STT (e.g., "Azure STT", "Gemini STT").
+        persona_name: Detected customer persona name.
+        persona_segment: Persona segment description.
+        products_mentioned: List of products customer mentioned.
+        upsell_opportunities: List of upsell opportunity keys.
+        recommended_product: Recommended CEAT product.
+        competitors_mentioned: List of competitors mentioned.
+        counter_positioning: Counter-positioning script for competitor.
+        objection_detected: Detected objection type.
+        upsell_script: Upsell script to use.
     """
     sentiment_color = SENTIMENT_COLORS.get(sentiment, Colors.YELLOW)
 
-    # Header with speaker and sentiment
-    print(
-        f"{Colors.DIM}[{timestamp}]{Colors.RESET} "
-        f"{Colors.CYAN}{speaker}{Colors.RESET} │ "
-        f"{sentiment_color}{Colors.BOLD}{sentiment.upper()}{Colors.RESET} "
-        f"{Colors.DIM}({confidence:.0%}){Colors.RESET}"
-    )
+    # Header with speaker, sentiment, and persona badge
+    header_parts = [
+        f"{Colors.DIM}[{timestamp}]{Colors.RESET}",
+        f"{Colors.CYAN}{speaker}{Colors.RESET} │",
+        f"{sentiment_color}{Colors.BOLD}{sentiment.upper()}{Colors.RESET}",
+        f"{Colors.DIM}({confidence:.0%}){Colors.RESET}",
+    ]
+    if persona_name:
+        header_parts.append(f"│ {Colors.MAGENTA}{persona_name}{Colors.RESET}")
+    print(" ".join(header_parts))
 
     # Original text (truncated if long)
     display_text = text[:77] + "..." if len(text) > 80 else text
@@ -153,6 +175,38 @@ def format_output(
         print(f"  {Colors.BOLD}{header}{Colors.RESET}")
         for suggestion in suggestions:
             print(f"    {bullet_color}{bullet}{Colors.RESET} {suggestion.text}")
+
+    # Multi-agent insights (concise, one line each)
+    insights = []
+
+    # Persona insight
+    if persona_segment:
+        insights.append(f"Persona: {persona_name} ({persona_segment})")
+
+    # Product insights
+    if recommended_product:
+        insights.append(f"Recommend: {recommended_product}")
+    elif products_mentioned:
+        insights.append(f"Products: {', '.join(products_mentioned[:2])}")
+
+    # Competitor alert
+    if competitors_mentioned:
+        comp_list = ", ".join(competitors_mentioned[:2])
+        insights.append(f"{Colors.YELLOW}Competitor: {comp_list}{Colors.RESET}")
+
+    # Upsell opportunity
+    if upsell_opportunities:
+        insights.append(f"{Colors.GREEN}Upsell: {upsell_opportunities[0]}{Colors.RESET}")
+
+    # Objection detected
+    if objection_detected:
+        insights.append(f"{Colors.RED}Objection: {objection_detected}{Colors.RESET}")
+
+    # Print insights
+    if insights:
+        print(f"  {Colors.DIM}─{Colors.RESET}")
+        for insight in insights:
+            print(f"  {insight}")
 
     # Latency breakdown
     total_latency = stt_latency_ms + agents_latency_ms

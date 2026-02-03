@@ -29,6 +29,11 @@ class Utterance:
     sentiment: str
     confidence: float
     signals: list[str]
+    # Multi-agent outputs
+    persona_name: str = ""
+    products_mentioned: list[str] = field(default_factory=list)
+    competitors_mentioned: list[str] = field(default_factory=list)
+    upsell_opportunities: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -98,6 +103,11 @@ class ConversationContext:
         sentiment: str,
         confidence: float,
         signals: list[str],
+        # Multi-agent outputs (optional for backward compatibility)
+        persona_name: str = "",
+        products_mentioned: list[str] | None = None,
+        competitors_mentioned: list[str] | None = None,
+        upsell_opportunities: list[str] | None = None,
     ) -> None:
         """Add a new utterance and extract signals."""
         utterance = Utterance(
@@ -107,6 +117,10 @@ class ConversationContext:
             sentiment=sentiment,
             confidence=confidence,
             signals=signals,
+            persona_name=persona_name,
+            products_mentioned=products_mentioned or [],
+            competitors_mentioned=competitors_mentioned or [],
+            upsell_opportunities=upsell_opportunities or [],
         )
         self.utterances.append(utterance)
 
@@ -145,13 +159,28 @@ class ConversationContext:
     def get_conversation_summary(self) -> dict[str, Any]:
         """Get a structured summary of the conversation."""
         sentiment_counts = {"positive": 0, "negative": 0, "neutral": 0}
+        persona_counts: dict[str, int] = {}
+        all_products: list[str] = []
+        all_competitors: list[str] = []
+        all_upsells: list[str] = []
+
         for u in self.utterances:
             if u.sentiment in sentiment_counts:
                 sentiment_counts[u.sentiment] += 1
+            if u.persona_name:
+                persona_counts[u.persona_name] = persona_counts.get(u.persona_name, 0) + 1
+            all_products.extend(u.products_mentioned)
+            all_competitors.extend(u.competitors_mentioned)
+            all_upsells.extend(u.upsell_opportunities)
 
         signal_counts = {}
         for s in self.tracked_signals:
             signal_counts[s.signal_type.value] = signal_counts.get(s.signal_type.value, 0) + 1
+
+        # Deduplicate and count
+        competitor_counts = {}
+        for c in all_competitors:
+            competitor_counts[c] = competitor_counts.get(c, 0) + 1
 
         return {
             "total_utterances": len(self.utterances),
@@ -161,6 +190,11 @@ class ConversationContext:
             "has_objections": len(self.get_signals_by_type(SignalType.OBJECTION)) > 0,
             "has_interest": len(self.get_signals_by_type(SignalType.INTEREST)) > 0,
             "has_budget_discussion": len(self.get_signals_by_type(SignalType.BUDGET)) > 0,
+            # Multi-agent tracking
+            "persona_counts": persona_counts,
+            "products_discussed": list(set(all_products)),
+            "competitor_counts": competitor_counts,
+            "upsell_opportunities": list(set(all_upsells)),
         }
 
     def format_for_prompt(self, max_utterances: int = 10) -> str:

@@ -1,11 +1,15 @@
 """Base class for sales assistant implementations."""
 
 import asyncio
+import select
 import signal
 import sys
+import termios
+import tty
 from abc import ABC, abstractmethod
 from datetime import datetime
 from pathlib import Path
+from threading import Thread
 
 import yaml
 from dotenv import load_dotenv
@@ -38,6 +42,10 @@ class BaseSalesAssistant(ABC):
     - _get_display_config(): Return display configuration
     - _start_transcription(): Start the transcription service
     - _stop_transcription(): Stop the transcription service
+
+    Keyboard commands during session:
+    - r: Reset session (clear context, start fresh)
+    - q: Quit
     """
 
     def __init__(self):
@@ -48,7 +56,10 @@ class BaseSalesAssistant(ABC):
 
         self._loop: asyncio.AbstractEventLoop | None = None
         self._running = False
+        self._muted = False
         self._output_config = self.prompts.get("output", {})
+        self._keyboard_thread: Thread | None = None
+        self._old_terminal_settings = None
 
     @abstractmethod
     def _get_display_config(self) -> DisplayConfig:
@@ -75,6 +86,91 @@ class BaseSalesAssistant(ABC):
         """Return color for latency display."""
         pass
 
+    def _print_session_summary(self) -> None:
+        """Print summary of current session."""
+        summary = self.context.get_conversation_summary()
+        if summary["total_utterances"] > 0:
+            print(f"\n{Colors.DIM}{'─' * 40}{Colors.RESET}")
+            print(f"{Colors.BOLD}Session Summary:{Colors.RESET}")
+            print(f"  Utterances: {summary['total_utterances']}")
+            print(f"  Duration: {summary['duration_seconds']:.0f}s")
+            print(f"  Sentiment: {summary['sentiment_distribution']}")
+            if summary['signal_counts']:
+                print(f"  Signals: {summary['signal_counts']}")
+            print(f"{Colors.DIM}{'─' * 40}{Colors.RESET}")
+
+    def reset_session(self) -> None:
+        """Reset the session - clear context and start fresh."""
+        # Print summary of old session
+        self._print_session_summary()
+
+        # Clear context
+        self.context.clear()
+
+        # Print reset message
+        print(f"\n{Colors.GREEN}{'=' * 60}{Colors.RESET}")
+        print(f"{Colors.GREEN}{Colors.BOLD}  SESSION RESET - Starting fresh{Colors.RESET}")
+        print(f"{Colors.GREEN}{'=' * 60}{Colors.RESET}")
+        print(f"{Colors.DIM}Listening... [r]=reset [m]=mute [q]=quit{Colors.RESET}\n")
+
+    def toggle_mute(self) -> None:
+        """Toggle mute state."""
+        self._muted = not self._muted
+        if self._muted:
+            print(f"\n{Colors.YELLOW}{'─' * 40}{Colors.RESET}")
+            print(f"{Colors.YELLOW}{Colors.BOLD}  MUTED - Press [m] to resume{Colors.RESET}")
+            print(f"{Colors.YELLOW}{'─' * 40}{Colors.RESET}\n")
+        else:
+            print(f"\n{Colors.GREEN}{'─' * 40}{Colors.RESET}")
+            print(f"{Colors.GREEN}{Colors.BOLD}  UNMUTED - Listening{Colors.RESET}")
+            print(f"{Colors.GREEN}{'─' * 40}{Colors.RESET}\n")
+
+    def _start_keyboard_listener(self) -> None:
+        """Start listening for keyboard input in a separate thread."""
+        if not sys.stdin.isatty():
+            return  # Don't listen if not a terminal
+
+        def keyboard_loop():
+            try:
+                # Save terminal settings and set to raw mode
+                self._old_terminal_settings = termios.tcgetattr(sys.stdin)
+                tty.setcbreak(sys.stdin.fileno())
+
+                while self._running:
+                    # Check if input is available (with timeout)
+                    if select.select([sys.stdin], [], [], 0.1)[0]:
+                        key = sys.stdin.read(1)
+                        if key.lower() == 'r':
+                            self.reset_session()
+                        elif key.lower() == 'm':
+                            self.toggle_mute()
+                        elif key.lower() == 'q':
+                            self._running = False
+            except Exception:
+                pass  # Ignore keyboard errors
+            finally:
+                # Restore terminal settings
+                if self._old_terminal_settings:
+                    try:
+                        termios.tcsetattr(
+                            sys.stdin, termios.TCSADRAIN, self._old_terminal_settings
+                        )
+                    except Exception:
+                        pass
+
+        self._keyboard_thread = Thread(target=keyboard_loop, daemon=True)
+        self._keyboard_thread.start()
+
+    def _stop_keyboard_listener(self) -> None:
+        """Stop the keyboard listener and restore terminal."""
+        if self._old_terminal_settings:
+            try:
+                termios.tcsetattr(
+                    sys.stdin, termios.TCSADRAIN, self._old_terminal_settings
+                )
+            except Exception:
+                pass
+
     def start(self) -> None:
         """Start the sales assistant."""
         self._running = True
@@ -83,7 +179,10 @@ class BaseSalesAssistant(ABC):
         self.context.clear()  # Fresh context for new session
 
         print_header(self._get_display_config())
+        print(f"{Colors.DIM}Commands: [r]=reset [m]=mute [q]=quit{Colors.RESET}\n")
+
         self._start_transcription()
+        self._start_keyboard_listener()
 
         try:
             while self._running:
@@ -96,25 +195,17 @@ class BaseSalesAssistant(ABC):
     def stop(self) -> None:
         """Stop the assistant."""
         self._running = False
+        self._stop_keyboard_listener()
         self._stop_transcription()
 
-        # Print session summary
-        summary = self.context.get_conversation_summary()
-        if summary["total_utterances"] > 0:
-            print(f"\n{Colors.DIM}{'─' * 40}{Colors.RESET}")
-            print(f"{Colors.BOLD}Session Summary:{Colors.RESET}")
-            print(f"  Utterances: {summary['total_utterances']}")
-            print(f"  Duration: {summary['duration_seconds']:.0f}s")
-            print(f"  Sentiment: {summary['sentiment_distribution']}")
-            if summary['signal_counts']:
-                print(f"  Signals: {summary['signal_counts']}")
-            print(f"{Colors.DIM}{'─' * 40}{Colors.RESET}")
-
+        # Print final session summary
+        self._print_session_summary()
         print(f"{Colors.DIM}Session ended.{Colors.RESET}")
 
     def _show_interim(self, speaker: str, text: str) -> None:
         """Show interim transcription."""
-        print_interim(speaker, text)
+        if not self._muted:
+            print_interim(speaker, text)
 
     async def _process_and_display(
         self,
@@ -123,6 +214,11 @@ class BaseSalesAssistant(ABC):
         stt_latency_ms: float,
     ) -> None:
         """Process utterance through agents and display results."""
+        # Skip processing if muted
+        if self._muted:
+            clear_line()
+            return
+
         clear_line()
 
         # Get formatted context for agents

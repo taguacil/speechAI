@@ -1,11 +1,14 @@
 """Consolidator that combines agent outputs into actionable suggestions."""
 
 import json
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Any
 
 from speechai.agents.base import AgentResult, BaseAgent
+
+_DEBUG = os.getenv("SPEECHAI_DEBUG", "").lower() in ("1", "true", "yes")
 
 
 @dataclass
@@ -260,6 +263,14 @@ class AgentOrchestrator:
         competition_data = competition_result.data if competition_result and competition_result.success else {}
         sales_prompts_data = sales_prompts_result.data if sales_prompts_result and sales_prompts_result.success else {}
 
+        if _DEBUG:
+            parallel_ms = (time.perf_counter() - start) * 1000
+            print(f"[DEBUG] Parallel agents done in {parallel_ms:.0f}ms:")
+            print(f"  sentiment={sentiment_data.get('sentiment')} ({sentiment_data.get('confidence', 0):.0%})")
+            print(f"  persona={persona_data.get('persona_name', '-')}")
+            print(f"  products={product_data.get('products_mentioned', [])}")
+            print(f"  competitors={competition_data.get('competitors_mentioned', [])}")
+
         # Run consolidator with all agent outputs
         consolidator_result = await self.consolidator.analyze(
             text,
@@ -279,6 +290,9 @@ class AgentOrchestrator:
         total_latency = (time.perf_counter() - start) * 1000
 
         suggestions = consolidator_result.data.get("suggestions", [])
+
+        if _DEBUG:
+            print(f"[DEBUG] Consolidator done. Total: {total_latency:.0f}ms, {len(suggestions)} suggestions")
 
         # Build enriched output with all agent data
         return ConsolidatedOutput(

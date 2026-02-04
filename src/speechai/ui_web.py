@@ -1,5 +1,6 @@
 """Gradio-based Web UI for real-time speech analysis display."""
 
+import os
 from dataclasses import dataclass, field
 from threading import Lock
 from typing import Callable
@@ -329,6 +330,7 @@ class WebUIAdapter:
         self._muted = False
         self._on_reset_callback: Callable | None = None
         self._on_mute_callback: Callable | None = None
+        self._debug = os.getenv("SPEECHAI_DEBUG", "").lower() in ("1", "true", "yes")
 
     @property
     def is_running(self) -> bool:
@@ -359,6 +361,12 @@ class WebUIAdapter:
         **kwargs,
     ) -> None:
         """Update state with new analysis results."""
+        if self._debug:
+            print(
+                f"[DEBUG] WebUI update_analysis: speaker={speaker}, sentiment={sentiment}, "
+                f"signals={len(signals)}, suggestions={len(suggestions)}, "
+                f"stt={stt_latency_ms:.0f}ms, agents={agents_latency_ms:.0f}ms"
+            )
         self.state.update(
             text=text,
             speaker=speaker,

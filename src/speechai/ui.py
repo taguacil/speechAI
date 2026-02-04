@@ -1,5 +1,7 @@
 """Textual-based UI for real-time speech analysis display."""
 
+import os
+
 from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal, Vertical, ScrollableContainer
 from textual.widgets import Static, Header, Footer, RichLog
@@ -63,7 +65,8 @@ class SuggestionPanel(Static):
 
     def update_suggestions(self, suggestions: list[str]) -> None:
         """Update the suggestions list."""
-        self.suggestions = suggestions
+        self.suggestions = list(suggestions)
+        self.refresh()
 
 
 class UtterancePanel(Static):
@@ -194,10 +197,10 @@ class SpeechAIApp(App):
 
     #suggestions-panel {
         height: auto;
-        min-height: 5;
+        min-height: 9;
         padding: 1;
         border: solid $success;
-        margin-bottom: 1;
+        margin-bottom: 0;
     }
 
     #latency-panel {
@@ -235,6 +238,7 @@ class SpeechAIApp(App):
         self._muted = False
         self._on_reset_callback = None
         self._on_mute_callback = None
+        self._debug = os.getenv("SPEECHAI_DEBUG", "").lower() in ("1", "true", "yes")
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -306,6 +310,13 @@ class SpeechAIApp(App):
         **kwargs,
     ) -> None:
         """Update all UI panels with new analysis results."""
+        if self._debug:
+            self._log_message(
+                f"[dim]DEBUG update_analysis: speaker={speaker}, sentiment={sentiment}, "
+                f"signals={len(signals)}, suggestions={len(suggestions)}, "
+                f"stt={stt_latency_ms:.0f}ms, agents={agents_latency_ms:.0f}ms[/dim]"
+            )
+
         # Update utterance
         utterance = self.query_one("#utterance-panel", UtterancePanel)
         utterance.update_utterance(text, speaker)

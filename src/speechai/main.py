@@ -13,6 +13,7 @@ Usage:
 
 import argparse
 import asyncio
+import os
 import signal
 import sys
 import time
@@ -58,6 +59,7 @@ class SalesAssistant:
         self.realtime = realtime
         self.batch_timeout_ms = batch_timeout_ms
         self.batch_max_count = batch_max_count
+        self._debug = os.getenv("SPEECHAI_DEBUG", "").lower() in ("1", "true", "yes")
 
         # Load config and initialize components
         self.prompts = load_prompts()
@@ -120,7 +122,8 @@ class SalesAssistant:
 
     def _on_transcript(self, result: TranscriptResult) -> None:
         """Handle transcription result."""
-        print(f"[DEBUG] _on_transcript called: is_final={result.is_final}, text={result.text[:30] if result.text else 'empty'}...")
+        if self._debug:
+            print(f"[DEBUG] _on_transcript: is_final={result.is_final}, text={result.text[:30] if result.text else 'empty'}...")
         if self._muted:
             return
 

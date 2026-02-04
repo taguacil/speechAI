@@ -74,10 +74,15 @@ Respond with JSON only (single object or array)."""
         base_url: str | None = None,
         model: str | None = None,
         api_key: str | None = None,
+        debug: bool | None = None,
     ):
         self.base_url = base_url or os.getenv("LITELLM_BASE_URL", "http://localhost:4000")
         self.model = model or os.getenv("GEMINI_MODEL", "gemini-2.0-flash-vertex")
         self.api_key = api_key or os.getenv("LITELLM_API_KEY", "sk-1234")
+        if debug is None:
+            self.debug = os.getenv("SPEECHAI_DEBUG", "").lower() in ("1", "true", "yes")
+        else:
+            self.debug = debug
 
         self._client = openai.OpenAI(
             api_key=self.api_key,
@@ -198,15 +203,18 @@ Respond with JSON only (single object or array)."""
                 # API call in progress - queue this audio
                 if self._pending_audio:
                     self._pending_audio += audio_data
-                    print(f"\n[DEBUG] Queued buffer: {buffer_len} frames ({buffer_ms}ms) - appended to pending")
+                    if self.debug:
+                        print(f"\n[DEBUG] Queued buffer: {buffer_len} frames ({buffer_ms}ms) - appended to pending")
                 else:
                     self._pending_audio = audio_data
-                    print(f"\n[DEBUG] Queued buffer: {buffer_len} frames ({buffer_ms}ms) - new pending")
+                    if self.debug:
+                        print(f"\n[DEBUG] Queued buffer: {buffer_len} frames ({buffer_ms}ms) - new pending")
                 return
 
             # No call in progress - start one
             self._processing = True
-            print(f"\n[DEBUG] Processing buffer: {buffer_len} frames ({buffer_ms}ms, {len(audio_data)} bytes)")
+            if self.debug:
+                print(f"\n[DEBUG] Processing buffer: {buffer_len} frames ({buffer_ms}ms, {len(audio_data)} bytes)")
 
         thread = threading.Thread(
             target=self._send_to_gemini_serialized,
@@ -239,8 +247,9 @@ Respond with JSON only (single object or array)."""
                 if self._pending_audio:
                     next_audio = self._pending_audio
                     self._pending_audio = None
-                    pending_ms = len(next_audio) // 2 // self.SAMPLE_RATE * 1000
-                    print(f"\n[DEBUG] Processing pending audio: {len(next_audio)} bytes (~{pending_ms}ms)")
+                    if self.debug:
+                        pending_ms = len(next_audio) // 2 // self.SAMPLE_RATE * 1000
+                        print(f"\n[DEBUG] Processing pending audio: {len(next_audio)} bytes (~{pending_ms}ms)")
                 else:
                     self._processing = False
                     return
@@ -279,7 +288,8 @@ Respond with JSON only (single object or array)."""
 
             latency_ms = (time.perf_counter() - start) * 1000
             results = self._parse_response(response, latency_ms)
-            print(f"[DEBUG] Gemini returned {len(results)} result(s) in {latency_ms:.0f}ms")
+            if self.debug:
+                print(f"[DEBUG] Gemini returned {len(results)} result(s) in {latency_ms:.0f}ms")
 
             if self._on_result and results:
                 # Add all segments to context for future speaker identification
@@ -293,7 +303,8 @@ Respond with JSON only (single object or array)."""
                 # Create batched result for processing
                 if len(results) == 1:
                     # Single segment - send as-is
-                    print(f"[DEBUG] Calling callback with single result: {results[0].text[:50]}...")
+                    if self.debug:
+                        print(f"[DEBUG] Calling callback with single result: {results[0].text[:50]}...")
                     self._on_result(results[0])
                 else:
                     # Multiple segments - combine into batch
@@ -318,7 +329,8 @@ Respond with JSON only (single object or array)."""
                         latency_ms=latency_ms,
                         segments=segments,
                     )
-                    print(f"[DEBUG] Calling callback with batch ({len(segments)} segments): {combined_text[:50]}...")
+                    if self.debug:
+                        print(f"[DEBUG] Calling callback with batch ({len(segments)} segments): {combined_text[:50]}...")
                     self._on_result(batch_result)
 
         except Exception as e:

@@ -97,9 +97,25 @@ Respond with JSON only (single object or array)."""
         # Conversation context for speaker identification
         self._recent_transcripts: list[tuple[str, str]] = []  # (speaker, text)
         self._max_context_items = 5
+        self._context_lock = threading.Lock()
 
-    def start(self, on_result: Callable[[TranscriptResult], None]) -> None:
-        """Start listening and processing audio."""
+        # Serialization: only one Gemini call at a time
+        self._processing = False
+        self._processing_lock = threading.Lock()
+        self._pending_audio: bytes | None = None
+
+    def start(
+        self,
+        on_result: Callable[[TranscriptResult], None],
+        start_mic: bool = True,
+    ) -> None:
+        """Start listening and processing audio.
+
+        Args:
+            on_result: Callback for transcription results.
+            start_mic: If True, start microphone capture. Set to False for file mode
+                       where audio frames are fed directly via _audio_callback.
+        """
         self._on_result = on_result
         self._running = True
         self._audio_buffer = []
@@ -107,15 +123,18 @@ Respond with JSON only (single object or array)."""
         self._silence_frames = 0
         self._speech_frames = 0
         self._recent_transcripts = []
+        self._processing = False
+        self._pending_audio = None
 
-        self._stream = sd.InputStream(
-            samplerate=self.SAMPLE_RATE,
-            channels=self.CHANNELS,
-            dtype=np.int16,
-            blocksize=self.FRAME_SIZE,
-            callback=self._audio_callback,
-        )
-        self._stream.start()
+        if start_mic:
+            self._stream = sd.InputStream(
+                samplerate=self.SAMPLE_RATE,
+                channels=self.CHANNELS,
+                dtype=np.int16,
+                blocksize=self.FRAME_SIZE,
+                callback=self._audio_callback,
+            )
+            self._stream.start()
 
     def stop(self) -> None:
         """Stop listening."""
@@ -158,18 +177,39 @@ Respond with JSON only (single object or array)."""
             self._process_buffer()
 
     def _process_buffer(self) -> None:
-        """Process buffered audio through Gemini."""
+        """Process buffered audio through Gemini.
+
+        Serializes API calls - if a call is in progress, audio is queued
+        and processed when the current call completes.
+        """
         if not self._audio_buffer or not self._on_result:
             return
 
+        buffer_len = len(self._audio_buffer)
+        buffer_ms = buffer_len * self.FRAME_DURATION_MS
         audio_data = b"".join(self._audio_buffer)
         self._audio_buffer = []
         self._is_speaking = False
         self._silence_frames = 0
         self._speech_frames = 0
 
+        with self._processing_lock:
+            if self._processing:
+                # API call in progress - queue this audio
+                if self._pending_audio:
+                    self._pending_audio += audio_data
+                    print(f"\n[DEBUG] Queued buffer: {buffer_len} frames ({buffer_ms}ms) - appended to pending")
+                else:
+                    self._pending_audio = audio_data
+                    print(f"\n[DEBUG] Queued buffer: {buffer_len} frames ({buffer_ms}ms) - new pending")
+                return
+
+            # No call in progress - start one
+            self._processing = True
+            print(f"\n[DEBUG] Processing buffer: {buffer_len} frames ({buffer_ms}ms, {len(audio_data)} bytes)")
+
         thread = threading.Thread(
-            target=self._send_to_gemini,
+            target=self._send_to_gemini_serialized,
             args=(audio_data,),
             daemon=True,
         )
@@ -177,16 +217,36 @@ Respond with JSON only (single object or array)."""
 
     def _build_context_prompt(self) -> str:
         """Build the user prompt with conversation context."""
-        if not self._recent_transcripts:
-            return self.USER_PROMPT_NO_CONTEXT
+        with self._context_lock:
+            if not self._recent_transcripts:
+                return self.USER_PROMPT_NO_CONTEXT
 
-        context_lines = []
-        for speaker, text in self._recent_transcripts:
-            label = "Rep" if speaker == "sales_rep" else "Customer"
-            context_lines.append(f"{label}: {text}")
+            context_lines = []
+            for speaker, text in self._recent_transcripts:
+                label = "Rep" if speaker == "sales_rep" else "Customer"
+                context_lines.append(f"{label}: {text}")
 
         context = "\n".join(context_lines)
         return self.USER_PROMPT_WITH_CONTEXT.format(context=context)
+
+    def _send_to_gemini_serialized(self, audio_data: bytes) -> None:
+        """Send audio to Gemini, then process any pending audio."""
+        try:
+            self._send_to_gemini(audio_data)
+        finally:
+            # Check for pending audio
+            with self._processing_lock:
+                if self._pending_audio:
+                    next_audio = self._pending_audio
+                    self._pending_audio = None
+                    pending_ms = len(next_audio) // 2 // self.SAMPLE_RATE * 1000
+                    print(f"\n[DEBUG] Processing pending audio: {len(next_audio)} bytes (~{pending_ms}ms)")
+                else:
+                    self._processing = False
+                    return
+
+            # Process pending audio (still in this thread)
+            self._send_to_gemini_serialized(next_audio)
 
     def _send_to_gemini(self, audio_data: bytes) -> None:
         """Send audio to Gemini and process response."""
@@ -219,18 +279,21 @@ Respond with JSON only (single object or array)."""
 
             latency_ms = (time.perf_counter() - start) * 1000
             results = self._parse_response(response, latency_ms)
+            print(f"[DEBUG] Gemini returned {len(results)} result(s) in {latency_ms:.0f}ms")
 
             if self._on_result and results:
                 # Add all segments to context for future speaker identification
-                for result in results:
-                    speaker = "sales_rep" if result.speaker_id == "Speaker-1" else "customer"
-                    self._recent_transcripts.append((speaker, result.text))
-                    if len(self._recent_transcripts) > self._max_context_items:
-                        self._recent_transcripts.pop(0)
+                with self._context_lock:
+                    for result in results:
+                        speaker = "sales_rep" if result.speaker_id == "Speaker-1" else "customer"
+                        self._recent_transcripts.append((speaker, result.text))
+                        if len(self._recent_transcripts) > self._max_context_items:
+                            self._recent_transcripts.pop(0)
 
                 # Create batched result for processing
                 if len(results) == 1:
                     # Single segment - send as-is
+                    print(f"[DEBUG] Calling callback with single result: {results[0].text[:50]}...")
                     self._on_result(results[0])
                 else:
                     # Multiple segments - combine into batch
@@ -255,6 +318,7 @@ Respond with JSON only (single object or array)."""
                         latency_ms=latency_ms,
                         segments=segments,
                     )
+                    print(f"[DEBUG] Calling callback with batch ({len(segments)} segments): {combined_text[:50]}...")
                     self._on_result(batch_result)
 
         except Exception as e:

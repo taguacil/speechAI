@@ -120,6 +120,7 @@ class SalesAssistant:
 
     def _on_transcript(self, result: TranscriptResult) -> None:
         """Handle transcription result."""
+        print(f"[DEBUG] _on_transcript called: is_final={result.is_final}, text={result.text[:30] if result.text else 'empty'}...")
         if self._muted:
             return
 
@@ -409,7 +410,7 @@ class SalesAssistant:
         from speechai.transcription_gemini import GeminiTranscriber
 
         transcriber = GeminiTranscriber()
-        transcriber.start(on_result=self._on_transcript)
+        transcriber.start(on_result=self._on_transcript, start_mic=False)
 
         try:
             frames, frame_duration = load_audio_frames(
@@ -490,7 +491,7 @@ class SalesAssistant:
             # Start file streaming in background thread
             if self.backend == "gemini":
                 self._transcriber = self._create_transcriber()
-                self._transcriber.start(on_result=self._on_transcript)
+                self._transcriber.start(on_result=self._on_transcript, start_mic=False)
 
             def stream_file():
                 # Wait for app to start
@@ -582,13 +583,14 @@ class SalesAssistant:
         self._app.set_callbacks(
             on_reset=lambda: self.context.clear(),
             on_mute=lambda: setattr(self, '_muted', not self._muted),
+            on_quit=lambda: setattr(self, '_running', False),
         )
 
         if self.source == "file":
             # Start file streaming in background thread
             if self.backend == "gemini":
                 self._transcriber = self._create_transcriber()
-                self._transcriber.start(on_result=self._on_transcript)
+                self._transcriber.start(on_result=self._on_transcript, start_mic=False)
 
             def stream_file():
                 # Wait for app to start

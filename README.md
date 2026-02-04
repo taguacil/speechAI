@@ -119,7 +119,8 @@ sudo apt install ffmpeg
 ### Python Dependencies
 
 Key libraries (installed automatically via `uv sync`):
-- **textual** - Terminal UI framework for the dashboard
+- **textual** - Terminal UI framework for the Textual dashboard
+- **gradio** - Web UI framework for the browser dashboard
 - **azure-cognitiveservices-speech** - Azure Speech SDK
 - **litellm** - LLM routing for agents
 - **sounddevice** / **webrtcvad** - Audio capture and voice activity detection

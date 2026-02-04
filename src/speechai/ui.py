@@ -115,6 +115,7 @@ class LatencyPanel(Static):
 
     stt_ms = reactive(0.0)
     agents_ms = reactive(0.0)
+    agent_latencies: dict[str, float] = {}
 
     def render(self) -> Text:
         text = Text()
@@ -122,15 +123,30 @@ class LatencyPanel(Static):
         text.append("Latency: ", style="bold dim")
         text.append(f"STT {self.stt_ms:.0f}ms", style="blue")
         text.append(" | ", style="dim")
-        text.append(f"Agents {self.agents_ms:.0f}ms", style="magenta")
-        text.append(" | ", style="dim")
+
+        if self.agent_latencies:
+            # Show individual agent latencies
+            for name, lat in self.agent_latencies.items():
+                short = name[:4]
+                text.append(f"{short}:{lat:.0f} ", style="magenta")
+        else:
+            text.append(f"Agents {self.agents_ms:.0f}ms", style="magenta")
+
+        text.append("| ", style="dim")
         text.append(f"Total {total:.0f}ms", style="cyan")
         return text
 
-    def update_latency(self, stt_ms: float, agents_ms: float) -> None:
+    def update_latency(
+        self,
+        stt_ms: float,
+        agents_ms: float,
+        agent_latencies: dict[str, float] | None = None,
+    ) -> None:
         """Update latency values."""
         self.stt_ms = stt_ms
         self.agents_ms = agents_ms
+        self.agent_latencies = agent_latencies or {}
+        self.refresh()
 
 
 class SpeechAIApp(App):
@@ -307,6 +323,7 @@ class SpeechAIApp(App):
         upsell_opportunities: list[str] | None = None,
         competitors_mentioned: list[str] | None = None,
         objection_detected: str = "",
+        agent_latencies: dict[str, float] | None = None,
         **kwargs,
     ) -> None:
         """Update all UI panels with new analysis results."""
@@ -370,7 +387,7 @@ class SpeechAIApp(App):
 
         # Update latency
         latency_panel = self.query_one("#latency-panel", LatencyPanel)
-        latency_panel.update_latency(stt_latency_ms, agents_latency_ms)
+        latency_panel.update_latency(stt_latency_ms, agents_latency_ms, agent_latencies)
 
         # Add to history
         sentiment_style = sentiment_colors.get(sentiment, "white")

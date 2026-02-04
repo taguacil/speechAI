@@ -39,6 +39,7 @@ class AnalysisState:
     # Latency
     stt_latency_ms: float = 0.0
     agents_latency_ms: float = 0.0
+    agent_latencies: dict[str, float] = field(default_factory=dict)
 
     # History
     history: list[str] = field(default_factory=list)
@@ -83,6 +84,7 @@ class AnalysisState:
                 "suggestions": list(self.suggestions),
                 "stt_latency_ms": self.stt_latency_ms,
                 "agents_latency_ms": self.agents_latency_ms,
+                "agent_latencies": dict(self.agent_latencies),
                 "history": list(self.history),
                 "interim_text": self.interim_text,
                 "interim_speaker": self.interim_speaker,
@@ -105,6 +107,7 @@ class AnalysisState:
             self.suggestions = []
             self.stt_latency_ms = 0.0
             self.agents_latency_ms = 0.0
+            self.agent_latencies = {}
             self.interim_text = ""
             self.interim_speaker = ""
             self.history.append("--- Session Reset ---")
@@ -177,14 +180,22 @@ def create_gradio_app(state: AnalysisState) -> gr.Blocks:
             return "*Waiting for input...*"
         return "\n".join(f"{i}. {s}" for i, s in enumerate(suggestions, 1))
 
-    def format_latency(stt_ms: float, agents_ms: float) -> str:
+    def format_latency(stt_ms: float, agents_ms: float, agent_latencies: dict = None) -> str:
         """Format latency display."""
         total = stt_ms + agents_ms
-        return (
-            f"<span style='color: #3b82f6;'>STT {stt_ms:.0f}ms</span> | "
-            f"<span style='color: #a855f7;'>Agents {agents_ms:.0f}ms</span> | "
-            f"<span style='color: #06b6d4;'>Total {total:.0f}ms</span>"
-        )
+        parts = [f"<span style='color: #3b82f6;'>STT {stt_ms:.0f}ms</span>"]
+
+        if agent_latencies:
+            agent_parts = []
+            for name, lat in agent_latencies.items():
+                short = name[:4]
+                agent_parts.append(f"{short}:{lat:.0f}")
+            parts.append(f"<span style='color: #a855f7;'>{' '.join(agent_parts)}</span>")
+        else:
+            parts.append(f"<span style='color: #a855f7;'>Agents {agents_ms:.0f}ms</span>")
+
+        parts.append(f"<span style='color: #06b6d4;'>Total {total:.0f}ms</span>")
+        return " | ".join(parts)
 
     def format_history(history: list) -> str:
         """Format history as scrollable text."""
@@ -209,7 +220,7 @@ def create_gradio_app(state: AnalysisState) -> gr.Blocks:
             format_competitor(snapshot["competitors_mentioned"], snapshot["objection_detected"]),
             format_signals(snapshot["signals"]),
             format_suggestions(snapshot["suggestions"]),
-            format_latency(snapshot["stt_latency_ms"], snapshot["agents_latency_ms"]),
+            format_latency(snapshot["stt_latency_ms"], snapshot["agents_latency_ms"], snapshot.get("agent_latencies")),
             format_history(snapshot["history"]),
         )
 
@@ -358,6 +369,7 @@ class WebUIAdapter:
         upsell_opportunities: list[str] | None = None,
         competitors_mentioned: list[str] | None = None,
         objection_detected: str = "",
+        agent_latencies: dict[str, float] | None = None,
         **kwargs,
     ) -> None:
         """Update state with new analysis results."""
@@ -376,6 +388,7 @@ class WebUIAdapter:
             suggestions=suggestions,
             stt_latency_ms=stt_latency_ms,
             agents_latency_ms=agents_latency_ms,
+            agent_latencies=agent_latencies or {},
             persona_name=persona_name,
             persona_segment=persona_segment,
             recommended_product=recommended_product,

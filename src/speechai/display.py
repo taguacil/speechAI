@@ -119,6 +119,7 @@ def format_output(
     counter_positioning: str = "",
     objection_detected: str = "",
     upsell_script: str = "",
+    agent_latencies: dict[str, float] | None = None,
 ) -> None:
     """Format and print the analysis output.
 
@@ -210,9 +211,22 @@ def format_output(
 
     # Latency breakdown
     total_latency = stt_latency_ms + agents_latency_ms
-    print(
-        f"  {mode_color}[{stt_label}: {stt_latency_ms:.0f}ms | "
-        f"Agents: {agents_latency_ms:.0f}ms | "
-        f"Total: {total_latency:.0f}ms]{Colors.RESET}"
-    )
+    if agent_latencies:
+        # Show individual agent latencies
+        agent_parts = []
+        for name, lat in agent_latencies.items():
+            short_name = name[:4]  # Abbreviate: sentiment->sent, persona->pers, etc.
+            agent_parts.append(f"{short_name}:{lat:.0f}")
+        agents_detail = " ".join(agent_parts)
+        print(
+            f"  {mode_color}[{stt_label}: {stt_latency_ms:.0f}ms | "
+            f"{agents_detail} | "
+            f"Total: {total_latency:.0f}ms]{Colors.RESET}"
+        )
+    else:
+        print(
+            f"  {mode_color}[{stt_label}: {stt_latency_ms:.0f}ms | "
+            f"Agents: {agents_latency_ms:.0f}ms | "
+            f"Total: {total_latency:.0f}ms]{Colors.RESET}"
+        )
     print()

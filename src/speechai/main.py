@@ -363,6 +363,7 @@ class SalesAssistant:
                 counter_positioning=output.counter_positioning,
                 objection_detected=output.objection_detected,
                 upsell_script=output.upsell_script,
+                agent_latencies=output.agent_latencies,
             )
         elif self.interface in ("ui", "web") and self._app and self._app.is_running:
             suggestions = [s.text for s in output.suggestions]
@@ -382,6 +383,7 @@ class SalesAssistant:
                 upsell_opportunities=output.upsell_opportunities,
                 competitors_mentioned=output.competitors_mentioned,
                 objection_detected=output.objection_detected,
+                agent_latencies=output.agent_latencies,
             )
 
     def _run_mic_mode(self) -> None:

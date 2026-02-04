@@ -52,6 +52,7 @@ class ConsolidatedOutput:
 
     # Metadata
     total_latency_ms: float = 0.0
+    agent_latencies: dict[str, float] = field(default_factory=dict)  # agent_name -> latency_ms
 
 
 class Consolidator(BaseAgent):
@@ -263,13 +264,22 @@ class AgentOrchestrator:
         competition_data = competition_result.data if competition_result and competition_result.success else {}
         sales_prompts_data = sales_prompts_result.data if sales_prompts_result and sales_prompts_result.success else {}
 
+        # Collect individual agent latencies
+        agent_latencies = {
+            "sentiment": sentiment_result.latency_ms if sentiment_result else 0,
+            "persona": persona_result.latency_ms if persona_result else 0,
+            "product": product_result.latency_ms if product_result else 0,
+            "competition": competition_result.latency_ms if competition_result else 0,
+            "sales_prompts": sales_prompts_result.latency_ms if sales_prompts_result else 0,
+        }
+
         if _DEBUG:
             parallel_ms = (time.perf_counter() - start) * 1000
             print(f"[DEBUG] Parallel agents done in {parallel_ms:.0f}ms:")
+            for name, lat in agent_latencies.items():
+                print(f"  {name}: {lat:.0f}ms")
             print(f"  sentiment={sentiment_data.get('sentiment')} ({sentiment_data.get('confidence', 0):.0%})")
             print(f"  persona={persona_data.get('persona_name', '-')}")
-            print(f"  products={product_data.get('products_mentioned', [])}")
-            print(f"  competitors={competition_data.get('competitors_mentioned', [])}")
 
         # Run consolidator with all agent outputs
         consolidator_result = await self.consolidator.analyze(
@@ -291,8 +301,11 @@ class AgentOrchestrator:
 
         suggestions = consolidator_result.data.get("suggestions", [])
 
+        # Add consolidator latency
+        agent_latencies["consolidator"] = consolidator_result.latency_ms
+
         if _DEBUG:
-            print(f"[DEBUG] Consolidator done. Total: {total_latency:.0f}ms, {len(suggestions)} suggestions")
+            print(f"[DEBUG] Consolidator: {consolidator_result.latency_ms:.0f}ms, Total: {total_latency:.0f}ms, {len(suggestions)} suggestions")
 
         # Build enriched output with all agent data
         return ConsolidatedOutput(
@@ -320,4 +333,5 @@ class AgentOrchestrator:
             call_stage=sales_prompts_data.get("call_stage", "discovery"),
             # Metadata
             total_latency_ms=total_latency,
+            agent_latencies=agent_latencies,
         )

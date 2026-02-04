@@ -25,6 +25,7 @@ class Utterance:
 
     text: str
     speaker: str
+    role: str  # "sales_rep" | "customer"
     timestamp: datetime
     sentiment: str
     confidence: float
@@ -54,11 +55,33 @@ class ConversationContext:
     - Full utterance history
     - Structured signals (objections, interests, etc.)
     - Conversation statistics
+    - Speaker roles (sales_rep vs customer)
     """
 
     utterances: list[Utterance] = field(default_factory=list)
     tracked_signals: list[TrackedSignal] = field(default_factory=list)
     session_start: datetime = field(default_factory=datetime.now)
+    call_type: str = "outbound"  # "outbound" | "inbound"
+    speaker_roles: dict[str, str] = field(default_factory=dict)  # speaker_id -> role
+
+    def assign_role(self, speaker: str) -> str:
+        """Assign role to speaker based on call type and order.
+
+        For outbound calls: first speaker = sales_rep
+        For inbound calls: first speaker = customer
+        """
+        if speaker in self.speaker_roles:
+            return self.speaker_roles[speaker]
+
+        # First speaker assignment based on call type
+        if not self.speaker_roles:
+            role = "sales_rep" if self.call_type == "outbound" else "customer"
+        else:
+            # Subsequent speakers get the opposite role
+            role = "customer" if "sales_rep" in self.speaker_roles.values() else "sales_rep"
+
+        self.speaker_roles[speaker] = role
+        return role
 
     # Signal keywords for automatic extraction
     SIGNAL_KEYWORDS: dict[SignalType, list[str]] = field(default_factory=lambda: {
@@ -100,6 +123,7 @@ class ConversationContext:
         self,
         text: str,
         speaker: str,
+        role: str,
         sentiment: str,
         confidence: float,
         signals: list[str],
@@ -113,6 +137,7 @@ class ConversationContext:
         utterance = Utterance(
             text=text,
             speaker=speaker,
+            role=role,
             timestamp=datetime.now(),
             sentiment=sentiment,
             confidence=confidence,
@@ -124,8 +149,9 @@ class ConversationContext:
         )
         self.utterances.append(utterance)
 
-        # Extract structured signals from text
-        self._extract_signals(utterance, len(self.utterances) - 1)
+        # Extract structured signals from text (only for customers)
+        if role == "customer":
+            self._extract_signals(utterance, len(self.utterances) - 1)
 
     def _extract_signals(self, utterance: Utterance, index: int) -> None:
         """Extract structured signals from utterance text."""
@@ -208,7 +234,8 @@ class ConversationContext:
             for u in recent:
                 sentiment_marker = {"positive": "+", "negative": "-", "neutral": "~"}
                 marker = sentiment_marker.get(u.sentiment, "~")
-                lines.append(f"  [{marker}] {u.speaker}: \"{u.text}\"")
+                role_label = "Rep" if u.role == "sales_rep" else "Customer"
+                lines.append(f"  [{marker}] {role_label}: \"{u.text}\"")
 
         # Key signals detected
         if self.tracked_signals:
@@ -237,4 +264,5 @@ class ConversationContext:
         """Clear all context (for new session)."""
         self.utterances.clear()
         self.tracked_signals.clear()
+        self.speaker_roles.clear()
         self.session_start = datetime.now()

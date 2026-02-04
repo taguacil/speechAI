@@ -95,6 +95,28 @@ class UISalesAssistant:
     ) -> None:
         """Process utterance through agents and update UI."""
         try:
+            # Assign role based on speaker order and call type
+            role = self.context.assign_role(speaker)
+
+            # Sales rep utterances: store transcript only, skip agent analysis
+            if role == "sales_rep":
+                self.context.add_utterance(
+                    text=text,
+                    speaker=speaker,
+                    role=role,
+                    sentiment="neutral",
+                    confidence=1.0,
+                    signals=[],
+                )
+                # Update UI with just the transcript (no analysis)
+                if self._app and self._app.is_running:
+                    self._app.call_from_thread(
+                        self._app._log_message,
+                        f"[dim]Rep: {text}[/dim]",
+                    )
+                return
+
+            # Customer utterances: full agent analysis
             # Get context for agents
             context_str = self.context.format_for_prompt(max_utterances=10)
 
@@ -109,6 +131,7 @@ class UISalesAssistant:
             self.context.add_utterance(
                 text=text,
                 speaker=speaker,
+                role=role,
                 sentiment=output.sentiment,
                 confidence=output.confidence,
                 signals=output.signals,

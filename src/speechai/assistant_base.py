@@ -232,6 +232,29 @@ class BaseSalesAssistant(ABC):
 
         clear_line()
 
+        # Assign role based on speaker order and call type
+        role = self.context.assign_role(speaker)
+
+        # Sales rep utterances: store transcript only, skip agent analysis
+        if role == "sales_rep":
+            self.context.add_utterance(
+                text=text,
+                speaker=speaker,
+                role=role,
+                sentiment="neutral",
+                confidence=1.0,
+                signals=[],
+            )
+            # Display sales rep transcript without analysis
+            timestamp = datetime.now().strftime(
+                self._output_config.get("timestamp_format", "%H:%M:%S")
+            )
+            print(
+                f"{Colors.DIM}[{timestamp}] Rep: {text}{Colors.RESET}"
+            )
+            return
+
+        # Customer utterances: full agent analysis
         # Get formatted context for agents
         context_str = self.context.format_for_prompt(max_utterances=10)
 
@@ -246,6 +269,7 @@ class BaseSalesAssistant(ABC):
         self.context.add_utterance(
             text=text,
             speaker=speaker,
+            role=role,
             sentiment=output.sentiment,
             confidence=output.confidence,
             signals=output.signals,

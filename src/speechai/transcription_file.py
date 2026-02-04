@@ -2,6 +2,7 @@
 
 import base64
 import io
+import json
 import os
 import shutil
 import subprocess
@@ -60,7 +61,24 @@ def convert_to_wav(input_path: Path, sample_rate: int = 16000) -> Path:
 
 
 class FileTranscriberGemini:
-    """Transcribe audio files using Gemini."""
+    """Transcribe audio files using Gemini with speaker identification."""
+
+    SYSTEM_PROMPT = """You are a transcription assistant for sales calls. Your task is to:
+1. Transcribe the audio exactly
+2. Identify who is speaking for each segment: "sales_rep" or "customer"
+
+This is an OUTBOUND sales call, so the sales representative initiated the call.
+
+Speaker identification guidelines:
+- Sales rep: Usually introduces themselves, company, asks questions about needs, pitches products
+- Customer: Responds to questions, asks about pricing/features, expresses concerns or interest
+
+Respond with a JSON array of segments:
+[
+  {"speaker": "sales_rep", "text": "Hello, this is John from ABC company..."},
+  {"speaker": "customer", "text": "Hi, yes I was looking at your products..."},
+  ...
+]"""
 
     def __init__(
         self,
@@ -78,13 +96,43 @@ class FileTranscriberGemini:
         )
 
     def transcribe(self, audio_path: Path) -> TranscriptResult | None:
-        """Transcribe an audio file.
+        """Transcribe an audio file (returns combined transcript).
 
         Args:
             audio_path: Path to audio file (MP3, WAV, etc.)
 
         Returns:
-            TranscriptResult with transcription.
+            TranscriptResult with combined transcription.
+        """
+        results = list(self.stream(audio_path, lambda r: None))
+        if not results:
+            return None
+
+        # Combine all segments
+        combined_text = " ".join(r.text for r in results)
+        total_latency = results[-1].latency_ms if results else 0
+
+        return TranscriptResult(
+            text=combined_text,
+            is_final=True,
+            speaker_id="Speaker",
+            offset_ms=0,
+            latency_ms=total_latency,
+        )
+
+    def stream(
+        self,
+        audio_path: Path,
+        on_result: Callable[[TranscriptResult], None],
+    ) -> list[TranscriptResult]:
+        """Stream transcription results with speaker identification.
+
+        Args:
+            audio_path: Path to audio file.
+            on_result: Callback for each transcription segment.
+
+        Returns:
+            List of all transcript results.
         """
         start = time.perf_counter()
 
@@ -96,6 +144,8 @@ class FileTranscriberGemini:
             wav_path = audio_path
             cleanup_wav = False
 
+        results: list[TranscriptResult] = []
+
         try:
             # Read and encode audio
             with open(wav_path, "rb") as f:
@@ -103,16 +153,20 @@ class FileTranscriberGemini:
 
             wav_base64 = base64.b64encode(audio_data).decode("utf-8")
 
-            # Send to Gemini
+            # Send to Gemini with speaker identification prompt
             response = self._client.chat.completions.create(
                 model=self.model,
                 messages=[
+                    {
+                        "role": "system",
+                        "content": self.SYSTEM_PROMPT,
+                    },
                     {
                         "role": "user",
                         "content": [
                             {
                                 "type": "text",
-                                "text": "Transcribe this audio exactly. Respond with ONLY the transcription text.",
+                                "text": "Transcribe this sales call audio with speaker identification. Return JSON array of segments.",
                             },
                             {
                                 "type": "input_audio",
@@ -121,26 +175,58 @@ class FileTranscriberGemini:
                         ],
                     },
                 ],
-                max_tokens=1000,
+                max_tokens=4000,
             )
 
             latency_ms = (time.perf_counter() - start) * 1000
-            text = response.choices[0].message.content.strip()
+            content = response.choices[0].message.content.strip()
 
-            if not text:
-                return None
+            if not content:
+                return results
 
-            return TranscriptResult(
-                text=text,
-                is_final=True,
-                speaker_id="Speaker",
-                offset_ms=0,
-                latency_ms=latency_ms,
-            )
+            # Parse JSON response
+            segments = self._parse_segments(content)
+
+            for segment in segments:
+                speaker = segment.get("speaker", "sales_rep")
+                text = segment.get("text", "").strip()
+
+                if not text:
+                    continue
+
+                # Map speaker to consistent format
+                speaker_id = "Speaker-1" if speaker == "sales_rep" else "Speaker-2"
+
+                result = TranscriptResult(
+                    text=text,
+                    is_final=True,
+                    speaker_id=speaker_id,
+                    offset_ms=0,
+                    latency_ms=latency_ms,
+                )
+                results.append(result)
+                on_result(result)
 
         finally:
             if cleanup_wav and wav_path.exists():
                 wav_path.unlink()
+
+        return results
+
+    def _parse_segments(self, content: str) -> list[dict]:
+        """Parse JSON segments from Gemini response."""
+        try:
+            # Handle markdown code blocks if present
+            if content.startswith("```"):
+                content = content.split("```")[1]
+                if content.startswith("json"):
+                    content = content[4:]
+                content = content.strip()
+
+            return json.loads(content)
+        except json.JSONDecodeError:
+            # Fallback: return single segment with full text
+            return [{"speaker": "sales_rep", "text": content}]
 
 
 class FileTranscriberAzure:
@@ -255,7 +341,7 @@ class FileTranscriberAzure:
     ) -> None:
         """Stream transcription results as they are recognized.
 
-        Azure Speech naturally streams results as it processes the file.
+        Uses ConversationTranscriber for speaker diarization.
 
         Args:
             audio_path: Path to audio file.
@@ -271,6 +357,19 @@ class FileTranscriberAzure:
             wav_path = audio_path
             cleanup_wav = False
 
+        # Speaker mapping for consistent labels
+        speaker_map: dict[str, str] = {}
+        speaker_count = 0
+
+        def get_speaker_label(speaker_id: str) -> str:
+            nonlocal speaker_count
+            if not speaker_id or speaker_id == "Unknown":
+                return "Unknown"
+            if speaker_id not in speaker_map:
+                speaker_count += 1
+                speaker_map[speaker_id] = f"Speaker-{speaker_count}"
+            return speaker_map[speaker_id]
+
         try:
             speech_config = speechsdk.SpeechConfig(
                 subscription=self.speech_key,
@@ -279,7 +378,9 @@ class FileTranscriberAzure:
             speech_config.speech_recognition_language = self.language
 
             audio_config = speechsdk.AudioConfig(filename=str(wav_path))
-            recognizer = speechsdk.SpeechRecognizer(
+
+            # Use ConversationTranscriber for speaker diarization
+            transcriber = speechsdk.transcription.ConversationTranscriber(
                 speech_config=speech_config,
                 audio_config=audio_config,
             )
@@ -287,13 +388,14 @@ class FileTranscriberAzure:
             done = False
             start_time = time.perf_counter()
 
-            def on_recognized(evt):
+            def on_transcribed(evt):
                 if evt.result.reason == speechsdk.ResultReason.RecognizedSpeech:
                     latency_ms = (time.perf_counter() - start_time) * 1000
+                    speaker = get_speaker_label(evt.result.speaker_id)
                     result = TranscriptResult(
                         text=evt.result.text,
                         is_final=True,
-                        speaker_id="Speaker",
+                        speaker_id=speaker,
                         offset_ms=evt.result.offset / 10000,  # ticks to ms
                         latency_ms=latency_ms,
                     )
@@ -307,16 +409,16 @@ class FileTranscriberAzure:
                 nonlocal done
                 done = True
 
-            recognizer.recognized.connect(on_recognized)
-            recognizer.session_stopped.connect(on_session_stopped)
-            recognizer.canceled.connect(on_canceled)
+            transcriber.transcribed.connect(on_transcribed)
+            transcriber.session_stopped.connect(on_session_stopped)
+            transcriber.canceled.connect(on_canceled)
 
-            recognizer.start_continuous_recognition()
+            transcriber.start_transcribing_async()
 
             while not done:
                 time.sleep(0.1)
 
-            recognizer.stop_continuous_recognition()
+            transcriber.stop_transcribing_async()
 
         finally:
             if cleanup_wav and wav_path.exists():

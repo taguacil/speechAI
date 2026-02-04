@@ -5,6 +5,7 @@ Uses Gemini 2.0 Flash via LiteLLM for transcription.
 
 import base64
 import io
+import json
 import os
 import threading
 import time
@@ -40,7 +41,29 @@ class GeminiTranscriber:
     MIN_SPEECH_MS = 300
     MAX_BUFFER_MS = 10000
 
-    USER_PROMPT = """Transcribe this audio exactly. Respond with ONLY the transcription text, nothing else."""
+    # Prompt for transcription with speaker identification
+    SYSTEM_PROMPT = """You are a transcription assistant for sales calls. Your task is to:
+1. Transcribe the audio exactly
+2. Identify who is speaking: "sales_rep" or "customer"
+
+This is an OUTBOUND sales call, so the sales representative initiated the call.
+
+Use conversation context to determine the speaker:
+- Sales rep: Usually introduces themselves, company, asks questions about needs, pitches products
+- Customer: Responds to questions, asks about pricing/features, expresses concerns or interest
+
+Respond with valid JSON only:
+{"transcript": "exact transcription here", "speaker": "sales_rep" or "customer"}"""
+
+    USER_PROMPT_WITH_CONTEXT = """Recent conversation:
+{context}
+
+Now transcribe this new audio and identify the speaker. Respond with JSON only:
+{{"transcript": "...", "speaker": "sales_rep" or "customer"}}"""
+
+    USER_PROMPT_NO_CONTEXT = """This is the start of a sales call. Transcribe the audio and identify the speaker.
+Respond with JSON only:
+{"transcript": "...", "speaker": "sales_rep" or "customer"}"""
 
     def __init__(
         self,
@@ -67,6 +90,10 @@ class GeminiTranscriber:
         self._running = False
         self._stream: sd.InputStream | None = None
 
+        # Conversation context for speaker identification
+        self._recent_transcripts: list[tuple[str, str]] = []  # (speaker, text)
+        self._max_context_items = 5
+
     def start(self, on_result: Callable[[TranscriptResult], None]) -> None:
         """Start listening and processing audio."""
         self._on_result = on_result
@@ -75,6 +102,7 @@ class GeminiTranscriber:
         self._is_speaking = False
         self._silence_frames = 0
         self._speech_frames = 0
+        self._recent_transcripts = []
 
         self._stream = sd.InputStream(
             samplerate=self.SAMPLE_RATE,
@@ -143,20 +171,38 @@ class GeminiTranscriber:
         )
         thread.start()
 
+    def _build_context_prompt(self) -> str:
+        """Build the user prompt with conversation context."""
+        if not self._recent_transcripts:
+            return self.USER_PROMPT_NO_CONTEXT
+
+        context_lines = []
+        for speaker, text in self._recent_transcripts:
+            label = "Rep" if speaker == "sales_rep" else "Customer"
+            context_lines.append(f"{label}: {text}")
+
+        context = "\n".join(context_lines)
+        return self.USER_PROMPT_WITH_CONTEXT.format(context=context)
+
     def _send_to_gemini(self, audio_data: bytes) -> None:
         """Send audio to Gemini and process response."""
         start = time.perf_counter()
 
         try:
             wav_base64 = self._audio_to_wav_base64(audio_data)
+            user_prompt = self._build_context_prompt()
 
             response = self._client.chat.completions.create(
                 model=self.model,
                 messages=[
                     {
+                        "role": "system",
+                        "content": self.SYSTEM_PROMPT,
+                    },
+                    {
                         "role": "user",
                         "content": [
-                            {"type": "text", "text": self.USER_PROMPT},
+                            {"type": "text", "text": user_prompt},
                             {
                                 "type": "input_audio",
                                 "input_audio": {"data": wav_base64, "format": "wav"},
@@ -164,13 +210,19 @@ class GeminiTranscriber:
                         ],
                     },
                 ],
-                max_tokens=200,
+                max_tokens=300,
             )
 
             latency_ms = (time.perf_counter() - start) * 1000
             result = self._parse_response(response, latency_ms)
 
             if self._on_result and result:
+                # Add to context for future speaker identification
+                speaker = "sales_rep" if result.speaker_id == "Speaker-1" else "customer"
+                self._recent_transcripts.append((speaker, result.text))
+                if len(self._recent_transcripts) > self._max_context_items:
+                    self._recent_transcripts.pop(0)
+
                 self._on_result(result)
 
         except Exception as e:
@@ -191,23 +243,66 @@ class GeminiTranscriber:
         return base64.b64encode(buffer.read()).decode("utf-8")
 
     def _parse_response(self, response: Any, latency_ms: float) -> TranscriptResult | None:
-        """Parse Gemini transcription response."""
+        """Parse Gemini transcription response with speaker identification."""
         try:
             content = response.choices[0].message.content
             if not content:
                 return None
 
-            text = content.strip()
-            if not text:
+            content = content.strip()
+            if not content:
                 return None
 
-            return TranscriptResult(
-                text=text,
-                is_final=True,
-                speaker_id="Speaker",
-                offset_ms=0,
-                latency_ms=latency_ms,
-            )
+            # Try to parse as JSON
+            try:
+                # Handle markdown code blocks if present
+                if content.startswith("```"):
+                    parts = content.split("```")
+                    if len(parts) >= 2:
+                        content = parts[1]
+                        if content.startswith("json"):
+                            content = content[4:]
+                        content = content.strip()
+
+                data = json.loads(content)
+                text = data.get("transcript", "").strip()
+                speaker = data.get("speaker", "sales_rep")
+
+                if not text:
+                    return None
+
+                # Map speaker to consistent format
+                speaker_id = "Speaker-1" if speaker == "sales_rep" else "Speaker-2"
+
+                return TranscriptResult(
+                    text=text,
+                    is_final=True,
+                    speaker_id=speaker_id,
+                    offset_ms=0,
+                    latency_ms=latency_ms,
+                )
+            except json.JSONDecodeError:
+                # Fallback: try to extract text if it looks like partial JSON
+                text = content
+                if '{"transcript"' in content or '"transcript"' in content:
+                    # Try to extract the transcript value
+                    import re
+                    match = re.search(r'"transcript"\s*:\s*"([^"]*)"', content)
+                    if match:
+                        text = match.group(1)
+
+                # Clean up any remaining JSON artifacts
+                text = text.strip()
+                if not text or text.startswith("{"):
+                    return None
+
+                return TranscriptResult(
+                    text=text,
+                    is_final=True,
+                    speaker_id="Speaker-1" if not self._recent_transcripts else "Speaker-2",
+                    offset_ms=0,
+                    latency_ms=latency_ms,
+                )
         except (AttributeError, IndexError):
             # No valid response - likely silence or noise
             return None

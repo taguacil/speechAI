@@ -13,6 +13,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from threading import Thread
 
 from dotenv import load_dotenv
 
@@ -54,11 +55,21 @@ class FileStreamProcessor:
         self.realtime = realtime
         self._mode_color = Colors.MAGENTA if backend == "gemini" else Colors.BLUE
         self._stt_label = "Gemini STT" if backend == "gemini" else "Azure STT"
-        # Persistent event loop for async processing
+
+        # Event loop running in background thread for thread-safe async calls
         self._loop = asyncio.new_event_loop()
+        self._loop_thread = Thread(target=self._run_loop, daemon=True)
+        self._loop_thread.start()
+
+    def _run_loop(self) -> None:
+        """Run the event loop in background thread."""
+        asyncio.set_event_loop(self._loop)
+        self._loop.run_forever()
 
     def close(self) -> None:
         """Clean up resources."""
+        if self._loop and self._loop.is_running():
+            self._loop.call_soon_threadsafe(self._loop.stop)
         if self._loop and not self._loop.is_closed():
             self._loop.close()
 
@@ -149,12 +160,38 @@ class FileStreamProcessor:
         clear_line()
         print_interim(result.speaker_id, result.text)
 
-        # Process through agents using persistent event loop
-        self._loop.run_until_complete(self._process_and_display(result))
+        # Process through agents using thread-safe async call
+        try:
+            future = asyncio.run_coroutine_threadsafe(
+                self._process_and_display(result), self._loop
+            )
+            future.result(timeout=30)  # Wait for completion
+        except Exception as e:
+            print(f"{Colors.DIM}[Processing error: {e}]{Colors.RESET}")
 
     async def _process_and_display(self, result: TranscriptResult) -> None:
         """Process utterance through agents and display."""
         clear_line()
+
+        # Assign role based on speaker order and call type
+        role = self.context.assign_role(result.speaker_id)
+
+        # Sales rep utterances: store transcript only, skip agent analysis
+        if role == "sales_rep":
+            self.context.add_utterance(
+                text=result.text,
+                speaker=result.speaker_id,
+                role=role,
+                sentiment="neutral",
+                confidence=1.0,
+                signals=[],
+            )
+            # Display sales rep transcript without analysis
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            print(f"{Colors.DIM}[{timestamp}] Rep: {result.text}{Colors.RESET}")
+            return
+
+        # Customer utterances: full agent analysis
         context_str = self.context.format_for_prompt(max_utterances=10)
 
         output = await self.orchestrator.process(
@@ -167,6 +204,7 @@ class FileStreamProcessor:
         self.context.add_utterance(
             text=result.text,
             speaker=result.speaker_id,
+            role=role,
             sentiment=output.sentiment,
             confidence=output.confidence,
             signals=output.signals,

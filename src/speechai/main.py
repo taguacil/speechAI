@@ -4,8 +4,10 @@ Usage:
     speechai                           # mic + gemini + cli
     speechai --backend azure           # mic + azure + cli
     speechai --ui                      # mic + gemini + ui
+    speechai --web                     # mic + gemini + web (localhost:7860)
     speechai --file recording.mp3      # file + gemini + cli
     speechai --file recording.mp3 --ui # file + gemini + ui
+    speechai --file recording.mp3 --web # file + gemini + web
     speechai --file recording.mp3 --backend azure --ui
 """
 
@@ -43,7 +45,7 @@ class SalesAssistant:
         self,
         source: str = "mic",  # "mic" | "file"
         backend: str = "gemini",  # "gemini" | "azure"
-        interface: str = "cli",  # "cli" | "ui"
+        interface: str = "cli",  # "cli" | "ui" | "web"
         file_path: Path | None = None,
         realtime: bool = True,
         batch_timeout_ms: int = 0,  # 0 = no batching, >0 = batch window in ms
@@ -125,7 +127,7 @@ class SalesAssistant:
             # Interim result
             if self.interface == "cli":
                 print_interim(result.speaker_id, result.text)
-            elif self._app and self._app.is_running:
+            elif self.interface in ("ui", "web") and self._app and self._app.is_running:
                 self._app.call_from_thread(
                     self._app.update_interim, result.speaker_id, result.text
                 )
@@ -229,7 +231,7 @@ class SalesAssistant:
         except Exception as e:
             if self.interface == "cli":
                 print(f"{Colors.DIM}[Processing error: {e}]{Colors.RESET}")
-            elif self._app and self._app.is_running:
+            elif self.interface in ("ui", "web") and self._app and self._app.is_running:
                 self._app.call_from_thread(self._app.show_error, str(e))
 
     async def _process_and_display(self, result: TranscriptResult) -> None:
@@ -266,7 +268,7 @@ class SalesAssistant:
                     )
                     if self.interface == "cli":
                         print(f"{Colors.DIM}[{timestamp}] Rep: {segment.text}{Colors.RESET}")
-                    elif self._app and self._app.is_running:
+                    elif self.interface in ("ui", "web") and self._app and self._app.is_running:
                         self._app.call_from_thread(
                             self._app._log_message,
                             f"[dim]Rep: {segment.text}[/dim]",
@@ -302,7 +304,7 @@ class SalesAssistant:
                 )
                 if self.interface == "cli":
                     print(f"{Colors.DIM}[{timestamp}] Rep: {combined_text}{Colors.RESET}")
-                elif self._app and self._app.is_running:
+                elif self.interface in ("ui", "web") and self._app and self._app.is_running:
                     self._app.call_from_thread(
                         self._app._log_message,
                         f"[dim]Rep: {combined_text}[/dim]",
@@ -358,7 +360,7 @@ class SalesAssistant:
                 objection_detected=output.objection_detected,
                 upsell_script=output.upsell_script,
             )
-        elif self._app and self._app.is_running:
+        elif self.interface in ("ui", "web") and self._app and self._app.is_running:
             suggestions = [s.text for s in output.suggestions]
             self._app.call_from_thread(
                 self._app.update_analysis,
@@ -572,6 +574,104 @@ class SalesAssistant:
         transcriber = FileTranscriberAzure()
         transcriber.stream(self.file_path, on_result=self._on_transcript)
 
+    def _run_web(self) -> None:
+        """Run in Web UI mode using Gradio."""
+        from speechai.ui_web import WebUIAdapter
+
+        self._app = WebUIAdapter()
+        self._app.set_callbacks(
+            on_reset=lambda: self.context.clear(),
+            on_mute=lambda: setattr(self, '_muted', not self._muted),
+        )
+
+        if self.source == "file":
+            # Start file streaming in background thread
+            if self.backend == "gemini":
+                self._transcriber = self._create_transcriber()
+                self._transcriber.start(on_result=self._on_transcript)
+
+            def stream_file():
+                # Wait for app to start
+                while self._app and not self._app.is_running:
+                    time.sleep(0.1)
+                time.sleep(0.5)
+
+                try:
+                    if self._app and self._app.is_running:
+                        self._app.call_from_thread(
+                            self._app._log_message,
+                            f"Streaming: {self.file_path.name} ({self.backend})",
+                        )
+
+                    if self.backend == "gemini":
+                        self._stream_file_gemini_web()
+                    else:
+                        self._stream_file_azure_web()
+
+                    if self._app and self._app.is_running:
+                        self._app.call_from_thread(
+                            self._app._log_message,
+                            "File streaming complete.",
+                        )
+                except Exception as e:
+                    if self._app and self._app.is_running:
+                        self._app.call_from_thread(self._app.show_error, str(e))
+
+            file_thread = Thread(target=stream_file, daemon=True)
+            file_thread.start()
+        else:
+            # Live microphone mode
+            self._transcriber = self._create_transcriber()
+            if self.backend == "gemini":
+                self._transcriber.start(on_result=self._on_transcript)
+            else:
+                self._transcriber.start(on_transcript=self._on_transcript)
+
+        try:
+            self._app.run()
+        finally:
+            if self._transcriber:
+                self._transcriber.stop()
+
+    def _stream_file_gemini_web(self) -> None:
+        """Stream file through Gemini in Web UI mode."""
+        from speechai.transcription_file import load_audio_frames
+
+        frames, frame_duration = load_audio_frames(
+            self.file_path,
+            sample_rate=self._transcriber.SAMPLE_RATE,
+            frame_size=self._transcriber.FRAME_SIZE,
+        )
+
+        for frame in frames:
+            if not self._app or not self._app.is_running:
+                break
+
+            frame_start = time.perf_counter()
+            self._transcriber._audio_callback(
+                frame, self._transcriber.FRAME_SIZE, None, None
+            )
+
+            elapsed = time.perf_counter() - frame_start
+            wait_time = frame_duration - elapsed
+            if wait_time > 0:
+                time.sleep(wait_time)
+
+        time.sleep(1.5)
+
+    def _stream_file_azure_web(self) -> None:
+        """Stream file through Azure in Web UI mode."""
+        from speechai.transcription_file import FileTranscriberAzure
+
+        if self._app and self._app.is_running:
+            self._app.call_from_thread(
+                self._app._log_message,
+                "Starting Azure recognition...",
+            )
+
+        transcriber = FileTranscriberAzure()
+        transcriber.stream(self.file_path, on_result=self._on_transcript)
+
     def run(self) -> None:
         """Run the assistant."""
         load_dotenv()
@@ -584,6 +684,8 @@ class SalesAssistant:
         try:
             if self.interface == "ui":
                 self._run_ui()
+            elif self.interface == "web":
+                self._run_web()
             else:
                 self._run_cli()
         finally:
@@ -601,8 +703,10 @@ Examples:
   speechai                              # Mic + Gemini + CLI
   speechai --backend azure              # Mic + Azure + CLI
   speechai --ui                         # Mic + Gemini + UI
+  speechai --web                        # Mic + Gemini + Web (localhost:7860)
   speechai --file call.mp3              # File + Gemini + CLI
   speechai --file call.mp3 --ui         # File + Gemini + UI
+  speechai --file call.mp3 --web        # File + Gemini + Web
   speechai --file call.mp3 --backend azure --ui
   speechai -b azure --batch-timeout 2000          # Batch Azure results (2s window)
   speechai -b azure --batch-max 3                 # Batch every 3 segments
@@ -623,6 +727,11 @@ Examples:
         "--ui",
         action="store_true",
         help="Use Textual UI instead of CLI",
+    )
+    parser.add_argument(
+        "--web",
+        action="store_true",
+        help="Use Gradio Web UI at http://localhost:7860",
     )
     parser.add_argument(
         "--no-realtime",
@@ -650,9 +759,9 @@ Examples:
         print(f"{Colors.RED}Error: File not found: {args.file}{Colors.RESET}")
         sys.exit(1)
 
-    # Determine source
+    # Determine source and interface
     source = "file" if args.file else "mic"
-    interface = "ui" if args.ui else "cli"
+    interface = "web" if args.web else ("ui" if args.ui else "cli")
 
     # Create and run assistant
     assistant = SalesAssistant(

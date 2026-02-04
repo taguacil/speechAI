@@ -132,6 +132,57 @@ QUICK_RESPONSES = {
     "graceful_exit": "Thank you for considering CEAT. Please keep our toll-free number 1800-267-1213 for any future needs.",
 }
 
+# Enhanced Dealer Objection Scripts with Customer Trigger Detection
+DEALER_OBJECTION_SCRIPTS = {
+    "price_focused": {
+        "trigger_keywords": ["too expensive", "cheaper", "basic tyre", "lower price", "budget", "costly"],
+        "customer_mindset": "Customer sees tyre as commodity and fears overspending",
+        "dealer_script": "I understand price matters. Tyres are the only contact between your car and the road. CEAT gives better braking, grip, and longer life, so you don't replace tyres early.",
+        "proof_points": ["Show tread depth", "Explain stronger sidewall", "Mention longer life & safety"],
+        "upgrade_path": "Milaze → SecuraDrive or SecuraDrive → SportDrive",
+        "closing": "This is the safest value option.",
+    },
+    "feature_brand_comparison": {
+        "trigger_keywords": ["better grip", "imported", "special about ceat", "softer", "other brand"],
+        "customer_mindset": "Customer wants technical justification, not discount",
+        "dealer_script": "Some tyres are soft but wear fast. CEAT balances grip + durability + braking. Designed for real road conditions – heat, traffic, rough roads.",
+        "proof_points": ["Compare softness vs wear", "Explain braking distance", "Indian road conditions example"],
+        "recommended_products": ["sportdrive", "sportdrive_calm"],
+        "closing": "Balanced performance, not marketing hype.",
+    },
+    "local_vs_international": {
+        "trigger_keywords": ["indian", "international brands", "export quality", "foreign", "imported better"],
+        "customer_mindset": "Customer equates foreign = quality",
+        "dealer_script": "CEAT is both local and international. It started with Pirelli technology roots. Factories outside India, exports globally, but tuned for local roads.",
+        "proof_points": ["Mention global plants & exports", "Warranty & service availability", "Deming Prize quality"],
+        "closing": "Global tech, local reliability.",
+    },
+    "upsizing_opportunity": {
+        "trigger_keywords": ["bigger size", "looks small", "wider tyre", "larger", "upgrade size"],
+        "customer_mindset": "Customer open to upgrade for performance/look",
+        "dealer_script": "Your car supports more than one approved size. Bigger size means better grip, braking, and stability. Mileage change is minimal, safety gain is big.",
+        "proof_points": ["Show approved sizes", "Explain wider footprint", "Visual size comparison"],
+        "recommended_products": ["sportdrive", "sportdrive_suv", "sportdrive_calm"],
+        "closing": "Most customers choose this upgrade.",
+    },
+    "partial_replacement": {
+        "trigger_keywords": ["only one tyre", "one tyre", "front tyres only", "rear tyres okay", "just two", "change one"],
+        "customer_mindset": "Customer unaware of vehicle balance & safety risk",
+        "dealer_script": "Mixing old and new tyres causes uneven grip. Car can pull during braking. Tyres should be changed in pairs or all four.",
+        "proof_points": ["Show old vs new tread", "Explain braking imbalance", "Safety demonstration"],
+        "upgrade_path": "Push 4 tyres (or 5 including spare)",
+        "closing": "This keeps the car balanced and safe.",
+    },
+    "premium_hesitation": {
+        "trigger_keywords": ["calm worth it", "really need premium", "what's the difference", "premium necessary"],
+        "customer_mindset": "Customer unsure of comfort & noise benefits",
+        "dealer_script": "Premium is not about speed. It's about less noise, smoother ride, better control. You'll feel the difference every day you drive.",
+        "proof_points": ["Demonstrate noise reduction", "Explain comfort vs standard tyre", "Daily driving benefit"],
+        "upgrade_path": "Upgrade one level only",
+        "closing": "Most popular choice for your car.",
+    },
+}
+
 
 @dataclass
 class SalesPromptsResult:

@@ -126,11 +126,14 @@ class ProductAgent(BaseAgent):
                 latency_ms=0,
             )
 
+        context = context or {}
+        role = context.get("role", "Customer")
+
         prompts = self.prompts.get("product", {})
         system_prompt = prompts.get("system", "")
         user_template = prompts.get("user", "")
 
-        user_prompt = self._format_prompt(user_template, text=text)
+        user_prompt = self._format_prompt(user_template, text=text, role=role)
         response = await self._call_llm(system_prompt, user_prompt)
 
         latency_ms = (time.perf_counter() - start) * 1000

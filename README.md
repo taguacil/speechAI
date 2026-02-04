@@ -5,6 +5,9 @@ Real-time speech analysis for CEAT tyre sales assistants. Transcribes live audio
 ## Features
 
 - **Real-time transcription** with Azure Speech or Gemini 2.0 Flash
+- **Speaker role detection** - Automatically identifies sales rep vs customer
+- **Role-based processing** - Only customer speech triggers agent analysis
+- **Multi-speaker batching** - Combine segments for efficient processing
 - **Multi-agent analysis** running in parallel for low latency:
   - Sentiment analysis with confidence scores and signal detection
   - Persona inference (6 CEAT customer personas)
@@ -14,20 +17,54 @@ Real-time speech analysis for CEAT tyre sales assistants. Transcribes live audio
 - **Actionable suggestions** consolidated from all agents (2-3 bullets max)
 - **Conversation context** tracking throughout the session
 - **Per-agent model configuration** for optimal performance
+- **Unified CLI** - Single entry point with --file, --backend, --ui options
 
 ## Architecture
 
 ```
-Microphone → Transcription → Parallel Agents ──────────────────→ Consolidator → Display
-                                    │                                   │
-                                    ├── Sentiment Agent (gpt-5-mini)    │
-                                    ├── Persona Agent (gpt-5-mini)      │
-                                    ├── Product Agent (gpt-5-mini)      ├→ 2-3 Suggestions
-                                    ├── Competition Agent (gpt-5-mini)  │
-                                    └── Sales Prompts Agent (haiku)     │
-                                                                        ↓
-                                                            claude-haiku-4-5
+Audio Input → Transcription → Role Assignment → Agents → Consolidator → Display
+                                    │               │
+                              ┌─────┴─────┐         ├── Sentiment
+                              │           │         ├── Persona
+                          sales_rep    customer     ├── Product
+                              │           │         ├── Competition
+                         (log only)   (analyze)     └── Sales Prompts
 ```
+
+### Speaker Role Detection
+
+The system automatically assigns roles based on call type and speaker order:
+
+- **Outbound calls** (default): First speaker is `sales_rep`, second is `customer`
+- **Inbound calls**: First speaker is `customer`, second is `sales_rep`
+
+**Role-based processing:**
+- `sales_rep` speech → Transcript stored only (no agent analysis)
+- `customer` speech → Full multi-agent analysis
+
+This prevents wasted computation on sales rep utterances where persona/sentiment analysis doesn't apply.
+
+### Multi-Speaker Batching
+
+Batching combines multiple transcript segments for efficient processing (single agent call instead of per-segment):
+
+- **Gemini**: Automatically detects multiple speakers within each VAD-triggered audio chunk. Additionally, use `--batch-timeout` or `--batch-max` to combine multiple audio chunks.
+- **Azure**: Use `--batch-timeout MS` (time window) or `--batch-max N` (segment count) to combine sequential utterances.
+
+```bash
+# Batch within 2-second windows (both backends)
+speechai --batch-timeout 2000
+
+# Batch every 3 transcript chunks
+speechai --batch-max 3
+
+# Combine both: flush after 3 segments OR 2 seconds, whichever comes first
+speechai --batch-timeout 2000 --batch-max 3
+```
+
+When batched, all segments are stored in history but customer text is combined for a single agent analysis call—reducing API costs and providing more context.
+
+**Note on speaker detection:** If the backend cannot distinguish speakers (returns "Unknown"), the system assumes turn-based alternation between sales rep and customer.
 
 ### Agent Overview
 
@@ -130,65 +167,66 @@ LITELLM_MODEL_CONSOLIDATOR=claude-haiku-4.5
 
 ## Usage
 
-### Live Microphone Mode (Console)
+Single unified CLI with all options:
 
 ```bash
-# Azure Speech transcription
-uv run speechai
-
-# Gemini transcription
-uv run speechai-gemini
+speechai [OPTIONS]
 ```
 
-**Keyboard commands during session:**
-- `r` - Reset session (clear context, start fresh)
-- `m` - Mute/unmute (pause processing)
-- `q` - Quit
+### Options
+
+| Option | Description |
+|--------|-------------|
+| `--file, -f PATH` | Audio file to process (default: microphone) |
+| `--backend, -b {gemini,azure}` | Transcription backend (default: gemini) |
+| `--ui` | Use Textual dashboard instead of CLI |
+| `--no-realtime` | Process file as fast as possible (no pacing) |
+| `--batch-timeout MS` | Batch transcripts within time window (ms) |
+| `--batch-max N` | Max segments to batch before processing |
+
+### Examples
+
+```bash
+# Live microphone + Gemini + CLI (default)
+uv run speechai
+
+# Live microphone + Azure + CLI
+uv run speechai --backend azure
+
+# Live microphone + Gemini + UI dashboard
+uv run speechai --ui
+
+# Stream audio file with Gemini
+uv run speechai --file recording.mp3
+
+# Stream file with Azure + UI
+uv run speechai --file recording.mp3 --backend azure --ui
+
+# Fast file processing (no real-time pacing)
+uv run speechai --file recording.mp3 --no-realtime
+
+# Batch Azure results (2-second window)
+uv run speechai -b azure --batch-timeout 2000
+
+# Batch every 3 segments
+uv run speechai -b azure --batch-max 3
+```
+
+**Keyboard commands:**
+- `Ctrl+C` - Quit
+- In UI mode: `r`=reset, `m`=mute, `q`=quit
 
 ### UI Mode (Textual Dashboard)
 
 Real-time dashboard with fixed panels that update as utterances are detected:
-
-```bash
-# Live microphone with Gemini (default)
-uv run speechai-ui
-
-# Live microphone with Azure
-uv run speechai-ui --backend azure
-
-# Stream from audio file
-uv run speechai-ui --file recording.mp3
-
-# Stream from file with Azure backend
-uv run speechai-ui --file recording.mp3 --backend azure
-```
 
 **UI Layout:**
 - Fixed panels for Sentiment, Persona, Product, Competitors
 - Suggestions panel with 2-3 actionable bullets
 - Real-time latency display
 - Scrollable history log
-- Keyboard shortcuts: `r`=reset, `m`=mute, `q`=quit
 
-### File Streaming Mode (Console)
-
-Stream audio files through the pipeline with real-time simulation:
-
-```bash
-# Stream file with Gemini (default, real-time pacing)
-uv run speechai-file recording.mp3
-
-# Stream file with Azure
-uv run speechai-file recording.mp3 --backend azure
-
-# Fast mode (no real-time pacing)
-uv run speechai-file recording.mp3 --no-realtime
-
-# Process all files in directory
-uv run speechai-file recordings/
-```
-
-Supported formats: `.mp3`, `.wav`, `.m4a`, `.ogg`, `.flac`
+Supported audio formats: `.mp3`, `.wav`, `.m4a`, `.ogg`, `.flac`
 
 ### Batch Transcription & Analysis Pipeline
 
@@ -369,16 +407,12 @@ Session Summary:
 │   └── analyze_transcripts.py # LLM-based transcript analysis
 │
 └── src/speechai/
-    ├── main.py              # Azure mode entry point (console)
-    ├── main_gemini.py       # Gemini mode entry point (console)
-    ├── main_file.py         # File streaming entry point (console)
-    ├── main_ui.py           # Textual UI entry point (dashboard)
+    ├── main.py              # Unified entry point (all modes)
     ├── ui.py                # Textual UI components
-    ├── assistant_base.py    # Shared assistant logic + orchestrator
     ├── display.py           # Terminal output formatting
-    ├── context.py           # Conversation context tracking
-    ├── transcription.py     # Azure Speech transcriber
-    ├── transcription_gemini.py  # Gemini transcriber
+    ├── context.py           # Conversation context + role assignment
+    ├── transcription.py     # Azure Speech transcriber + data types
+    ├── transcription_gemini.py  # Gemini VAD transcriber
     ├── transcription_file.py    # File-based transcription utilities
     ├── prompts.yaml         # Agent prompts + CEAT domain knowledge
     └── agents/

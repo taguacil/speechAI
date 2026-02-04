@@ -21,9 +21,6 @@ dependencies = [
 
 [project.scripts]
 speechai = "speechai.main:main"
-speechai-gemini = "speechai.main_gemini:main"
-speechai-file = "speechai.main_file:main"
-speechai-ui = "speechai.main_ui:main"
 
 [tool.uv]
 package = true

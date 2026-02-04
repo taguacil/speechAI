@@ -63,14 +63,31 @@ class ConversationContext:
     session_start: datetime = field(default_factory=datetime.now)
     call_type: str = "outbound"  # "outbound" | "inbound"
     speaker_roles: dict[str, str] = field(default_factory=dict)  # speaker_id -> role
+    _last_role: str = ""  # Track last role for Unknown speaker alternation
 
     def assign_role(self, speaker: str) -> str:
         """Assign role to speaker based on call type and order.
 
         For outbound calls: first speaker = sales_rep
         For inbound calls: first speaker = customer
+
+        Special handling for "Unknown" speakers: alternate roles based on
+        conversation turn-taking assumption.
         """
+        # Handle Unknown speakers with turn-based alternation
+        if speaker == "Unknown":
+            if not self._last_role:
+                # First speaker
+                role = "sales_rep" if self.call_type == "outbound" else "customer"
+            else:
+                # Alternate from last speaker
+                role = "customer" if self._last_role == "sales_rep" else "sales_rep"
+            self._last_role = role
+            return role
+
+        # Known speaker - check existing assignment
         if speaker in self.speaker_roles:
+            self._last_role = self.speaker_roles[speaker]
             return self.speaker_roles[speaker]
 
         # First speaker assignment based on call type
@@ -81,6 +98,7 @@ class ConversationContext:
             role = "customer" if "sales_rep" in self.speaker_roles.values() else "sales_rep"
 
         self.speaker_roles[speaker] = role
+        self._last_role = role
         return role
 
     # Signal keywords for automatic extraction
@@ -265,4 +283,5 @@ class ConversationContext:
         self.utterances.clear()
         self.tracked_signals.clear()
         self.speaker_roles.clear()
+        self._last_role = ""
         self.session_start = datetime.now()

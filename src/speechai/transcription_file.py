@@ -16,7 +16,7 @@ from typing import Any
 import numpy as np
 import openai
 
-from speechai.transcription import TranscriptResult
+from speechai.transcription import TranscriptResult, TranscriptSegment
 
 
 def _check_ffmpeg() -> None:
@@ -185,9 +185,13 @@ Respond with a JSON array of segments:
                 return results
 
             # Parse JSON response
-            segments = self._parse_segments(content)
+            parsed_segments = self._parse_segments(content)
 
-            for segment in segments:
+            # Build segment list and collect customer text
+            transcript_segments = []
+            customer_texts = []
+
+            for segment in parsed_segments:
                 speaker = segment.get("speaker", "sales_rep")
                 text = segment.get("text", "").strip()
 
@@ -197,15 +201,42 @@ Respond with a JSON array of segments:
                 # Map speaker to consistent format
                 speaker_id = "Speaker-1" if speaker == "sales_rep" else "Speaker-2"
 
-                result = TranscriptResult(
+                transcript_segments.append(TranscriptSegment(
                     text=text,
-                    is_final=True,
                     speaker_id=speaker_id,
+                ))
+
+                if speaker_id == "Speaker-2":
+                    customer_texts.append(text)
+
+            if not transcript_segments:
+                return results
+
+            # Create batched result if multiple segments, single otherwise
+            if len(transcript_segments) == 1:
+                result = TranscriptResult(
+                    text=transcript_segments[0].text,
+                    is_final=True,
+                    speaker_id=transcript_segments[0].speaker_id,
                     offset_ms=0,
                     latency_ms=latency_ms,
                 )
-                results.append(result)
-                on_result(result)
+            else:
+                # Combine customer text for analysis
+                combined_text = " ".join(customer_texts) if customer_texts else transcript_segments[-1].text
+                primary_speaker = "Speaker-2" if customer_texts else transcript_segments[-1].speaker_id
+
+                result = TranscriptResult(
+                    text=combined_text,
+                    is_final=True,
+                    speaker_id=primary_speaker,
+                    offset_ms=0,
+                    latency_ms=latency_ms,
+                    segments=transcript_segments,
+                )
+
+            results.append(result)
+            on_result(result)
 
         finally:
             if cleanup_wav and wav_path.exists():

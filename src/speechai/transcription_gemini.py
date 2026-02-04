@@ -19,7 +19,7 @@ import webrtcvad
 
 import openai
 
-from speechai.transcription import TranscriptResult
+from speechai.transcription import TranscriptResult, TranscriptSegment
 
 
 class GeminiTranscriber:
@@ -42,28 +42,32 @@ class GeminiTranscriber:
     MAX_BUFFER_MS = 10000
 
     # Prompt for transcription with speaker identification
+    # Supports multiple speakers per audio chunk
     SYSTEM_PROMPT = """You are a transcription assistant for sales calls. Your task is to:
 1. Transcribe the audio exactly
-2. Identify who is speaking: "sales_rep" or "customer"
+2. Identify who is speaking for each segment: "sales_rep" or "customer"
 
 This is an OUTBOUND sales call, so the sales representative initiated the call.
 
-Use conversation context to determine the speaker:
-- Sales rep: Usually introduces themselves, company, asks questions about needs, pitches products
+Speaker identification guidelines:
+- Sales rep: Introduces themselves, company name, asks questions about needs, pitches products, uses professional tone
 - Customer: Responds to questions, asks about pricing/features, expresses concerns or interest
 
-Respond with valid JSON only:
-{"transcript": "exact transcription here", "speaker": "sales_rep" or "customer"}"""
+IMPORTANT: The audio may contain MULTIPLE speakers. If you hear speaker changes, return an array of segments.
+
+Response format - use array if multiple speakers, single object if one speaker:
+- Single speaker: {"transcript": "...", "speaker": "sales_rep" or "customer"}
+- Multiple speakers: [{"transcript": "...", "speaker": "sales_rep"}, {"transcript": "...", "speaker": "customer"}]"""
 
     USER_PROMPT_WITH_CONTEXT = """Recent conversation:
 {context}
 
-Now transcribe this new audio and identify the speaker. Respond with JSON only:
-{{"transcript": "...", "speaker": "sales_rep" or "customer"}}"""
+Transcribe this audio. If multiple people speak, return an array of segments in order.
+Respond with JSON only (single object or array)."""
 
-    USER_PROMPT_NO_CONTEXT = """This is the start of a sales call. Transcribe the audio and identify the speaker.
-Respond with JSON only:
-{"transcript": "...", "speaker": "sales_rep" or "customer"}"""
+    USER_PROMPT_NO_CONTEXT = """This is the start of a sales call. Transcribe the audio.
+If multiple people speak, return an array of segments in order.
+Respond with JSON only (single object or array)."""
 
     def __init__(
         self,
@@ -214,16 +218,44 @@ Respond with JSON only:
             )
 
             latency_ms = (time.perf_counter() - start) * 1000
-            result = self._parse_response(response, latency_ms)
+            results = self._parse_response(response, latency_ms)
 
-            if self._on_result and result:
-                # Add to context for future speaker identification
-                speaker = "sales_rep" if result.speaker_id == "Speaker-1" else "customer"
-                self._recent_transcripts.append((speaker, result.text))
-                if len(self._recent_transcripts) > self._max_context_items:
-                    self._recent_transcripts.pop(0)
+            if self._on_result and results:
+                # Add all segments to context for future speaker identification
+                for result in results:
+                    speaker = "sales_rep" if result.speaker_id == "Speaker-1" else "customer"
+                    self._recent_transcripts.append((speaker, result.text))
+                    if len(self._recent_transcripts) > self._max_context_items:
+                        self._recent_transcripts.pop(0)
 
-                self._on_result(result)
+                # Create batched result for processing
+                if len(results) == 1:
+                    # Single segment - send as-is
+                    self._on_result(results[0])
+                else:
+                    # Multiple segments - combine into batch
+                    segments = [
+                        TranscriptSegment(text=r.text, speaker_id=r.speaker_id)
+                        for r in results
+                    ]
+                    # Combine customer text for analysis (skip sales rep)
+                    customer_texts = [
+                        r.text for r in results if r.speaker_id == "Speaker-2"
+                    ]
+                    combined_text = " ".join(customer_texts) if customer_texts else results[-1].text
+
+                    # Use the last customer speaker or last speaker overall
+                    primary_speaker = "Speaker-2" if customer_texts else results[-1].speaker_id
+
+                    batch_result = TranscriptResult(
+                        text=combined_text,
+                        is_final=True,
+                        speaker_id=primary_speaker,
+                        offset_ms=0,
+                        latency_ms=latency_ms,
+                        segments=segments,
+                    )
+                    self._on_result(batch_result)
 
         except Exception as e:
             # Only log if there's a meaningful error message
@@ -242,16 +274,20 @@ Respond with JSON only:
         buffer.seek(0)
         return base64.b64encode(buffer.read()).decode("utf-8")
 
-    def _parse_response(self, response: Any, latency_ms: float) -> TranscriptResult | None:
-        """Parse Gemini transcription response with speaker identification."""
+    def _parse_response(self, response: Any, latency_ms: float) -> list[TranscriptResult]:
+        """Parse Gemini transcription response with speaker identification.
+
+        Returns a list of TranscriptResults (may be multiple if audio contains
+        multiple speakers).
+        """
         try:
             content = response.choices[0].message.content
             if not content:
-                return None
+                return []
 
             content = content.strip()
             if not content:
-                return None
+                return []
 
             # Try to parse as JSON
             try:
@@ -265,44 +301,63 @@ Respond with JSON only:
                         content = content.strip()
 
                 data = json.loads(content)
+
+                # Handle array of segments (multiple speakers)
+                if isinstance(data, list):
+                    results = []
+                    for segment in data:
+                        text = segment.get("transcript", "").strip()
+                        speaker = segment.get("speaker", "sales_rep")
+                        if text:
+                            speaker_id = "Speaker-1" if speaker == "sales_rep" else "Speaker-2"
+                            results.append(TranscriptResult(
+                                text=text,
+                                is_final=True,
+                                speaker_id=speaker_id,
+                                offset_ms=0,
+                                latency_ms=latency_ms,
+                            ))
+                    return results
+
+                # Handle single object (one speaker)
                 text = data.get("transcript", "").strip()
                 speaker = data.get("speaker", "sales_rep")
 
                 if not text:
-                    return None
+                    return []
 
                 # Map speaker to consistent format
                 speaker_id = "Speaker-1" if speaker == "sales_rep" else "Speaker-2"
 
-                return TranscriptResult(
+                return [TranscriptResult(
                     text=text,
                     is_final=True,
                     speaker_id=speaker_id,
                     offset_ms=0,
                     latency_ms=latency_ms,
-                )
+                )]
             except json.JSONDecodeError:
                 # Fallback: try to extract text if it looks like partial JSON
+                import re
                 text = content
                 if '{"transcript"' in content or '"transcript"' in content:
                     # Try to extract the transcript value
-                    import re
                     match = re.search(r'"transcript"\s*:\s*"([^"]*)"', content)
                     if match:
                         text = match.group(1)
 
                 # Clean up any remaining JSON artifacts
                 text = text.strip()
-                if not text or text.startswith("{"):
-                    return None
+                if not text or text.startswith("{") or text.startswith("["):
+                    return []
 
-                return TranscriptResult(
+                return [TranscriptResult(
                     text=text,
                     is_final=True,
                     speaker_id="Speaker-1" if not self._recent_transcripts else "Speaker-2",
                     offset_ms=0,
                     latency_ms=latency_ms,
-                )
+                )]
         except (AttributeError, IndexError):
             # No valid response - likely silence or noise
-            return None
+            return []

@@ -33,8 +33,11 @@ sentiment:
 
     Return 1-3 signals that explain your sentiment classification.
 
+    NOTE: Input may occasionally include sales rep speech if speaker detection was imperfect.
+    If the text sounds like a sales pitch rather than customer response, return neutral with low confidence.
+
   user: |
-    Customer said: "{text}"
+    {role} said: "{text}"
 
 # -----------------------------------------------------------------------------
 # Agent: Persona Inference
@@ -91,8 +94,11 @@ persona:
        - Triggers: "trust", "brand", "convenient", "easy", "efficient", "recommend", "suggest"
        - Pitch: Emphasize dealer network (4000+), warranty registration, hassle-free service
 
+    NOTE: Input may occasionally include sales rep speech if speaker detection was imperfect.
+    If the text sounds like a sales pitch, return low confidence with no persona match.
+
   user: |
-    Customer said: "{text}"
+    {role} said: "{text}"
 
 # -----------------------------------------------------------------------------
 # Agent: Product Analysis
@@ -143,8 +149,11 @@ product:
     - Fuel efficiency, tread life, wet grip, dry grip, ride comfort
     - Durability, noise reduction, puncture resistance, warranty
 
+    NOTE: Input may occasionally include sales rep speech if speaker detection was imperfect.
+    If the text sounds like a sales pitch, focus on products being pitched rather than customer needs.
+
   user: |
-    Customer said: "{text}"
+    {role} said: "{text}"
 
 # -----------------------------------------------------------------------------
 # Agent: Competition Analysis
@@ -201,8 +210,11 @@ competition:
     - Weakness: Smaller market presence
     - Counter: "CEAT offers better availability with 4000+ dealers and stronger local manufacturing."
 
+    NOTE: Input may occasionally include sales rep speech if speaker detection was imperfect.
+    Still detect any competitor mentions regardless of who is speaking.
+
   user: |
-    Customer said: "{text}"
+    {role} said: "{text}"
 
 # -----------------------------------------------------------------------------
 # Agent: Sales Prompts
@@ -261,8 +273,11 @@ sales_prompts:
     dealer_issues:
     "I sincerely apologize. Let me connect you with priority support and find an alternative dealer. Our toll-free 1800-267-1213 is available 24/7."
 
+    NOTE: Input may occasionally include sales rep speech if speaker detection was imperfect.
+    If the text sounds like a sales pitch, focus on what stage the call is in and next actions.
+
   user: |
-    Customer said: "{text}"
+    {role} said: "{text}"
 
 # -----------------------------------------------------------------------------
 # Consolidator: Combines all agent outputs into final suggestions
@@ -293,7 +308,7 @@ consolidator:
     === CONVERSATION HISTORY ===
     {conversation_context}
 
-    === CUSTOMER SAID ===
+    === {role} SAID ===
     "{text}"
 
     === ANALYSIS ===

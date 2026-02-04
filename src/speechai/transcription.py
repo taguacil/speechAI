@@ -9,14 +9,28 @@ import azure.cognitiveservices.speech as speechsdk
 
 
 @dataclass
+class TranscriptSegment:
+    """A single segment of transcription with speaker info."""
+
+    text: str
+    speaker_id: str  # "Speaker-1", "Speaker-2", etc.
+
+
+@dataclass
 class TranscriptResult:
-    """Result from transcription with speaker info."""
+    """Result from transcription with speaker info.
+
+    For single-speaker results: text contains the transcript, speaker_id identifies speaker.
+    For multi-speaker batches: segments contains individual parts, text is combined customer speech.
+    """
 
     text: str
     is_final: bool
     speaker_id: str  # "Guest-1", "Guest-2", etc. or "Unknown"
     offset_ms: int  # When this was spoken (for ordering)
     latency_ms: float  # Time from speech start to final result
+    # Optional: for batched multi-speaker results
+    segments: list[TranscriptSegment] | None = None
 
 
 class AzureTranscriber:

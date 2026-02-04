@@ -80,7 +80,8 @@ class Consolidator(BaseAgent):
         start = time.perf_counter()
         context = context or {}
 
-        # Extract all agent data
+        # Extract role and all agent data
+        role = context.get("role", "Customer")
         sentiment = context.get("sentiment", "neutral")
         confidence = context.get("confidence", 0.0)
         signals = context.get("signals", [])
@@ -99,6 +100,7 @@ class Consolidator(BaseAgent):
         user_prompt = self._format_prompt(
             user_template,
             text=text,
+            role=role.upper(),
             # Sentiment
             sentiment=sentiment,
             confidence=f"{confidence:.0%}",
@@ -211,13 +213,15 @@ class AgentOrchestrator:
         text: str,
         speaker: str = "customer",
         conversation_context: str = "",
+        role: str = "Customer",
     ) -> ConsolidatedOutput:
-        """Process customer speech through all agents in parallel.
+        """Process speech through all agents in parallel.
 
         Args:
             text: Transcribed speech.
             speaker: Speaker identifier.
             conversation_context: Formatted conversation history for context.
+            role: Speaker role for prompts ("Customer" or "Sales Rep").
 
         Returns:
             ConsolidatedOutput with all agent insights and suggestions.
@@ -229,13 +233,16 @@ class AgentOrchestrator:
 
         start = time.perf_counter()
 
+        # Pass role to agents via context
+        agent_context = {"role": role}
+
         # Run all parallel agents concurrently
         results = await asyncio.gather(
-            self.sentiment_agent.analyze(text),
-            self.persona_agent.analyze(text),
-            self.product_agent.analyze(text),
-            self.competition_agent.analyze(text),
-            self.sales_prompts_agent.analyze(text),
+            self.sentiment_agent.analyze(text, context=agent_context),
+            self.persona_agent.analyze(text, context=agent_context),
+            self.product_agent.analyze(text, context=agent_context),
+            self.competition_agent.analyze(text, context=agent_context),
+            self.sales_prompts_agent.analyze(text, context=agent_context),
             return_exceptions=True,
         )
 
@@ -257,6 +264,7 @@ class AgentOrchestrator:
         consolidator_result = await self.consolidator.analyze(
             text,
             context={
+                "role": role,
                 "sentiment": sentiment_data.get("sentiment", "neutral"),
                 "confidence": sentiment_data.get("confidence", 0.0),
                 "signals": sentiment_data.get("signals", []),

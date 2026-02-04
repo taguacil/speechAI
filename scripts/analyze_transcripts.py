@@ -23,7 +23,7 @@ Usage:
 Environment variables:
     LLM_BASE_URL - LiteLLM proxy URL (default: http://localhost:4000)
     LLM_API_KEY - API key for LiteLLM
-    LLM_MODEL - Default model to use
+    LLM_MODEL_ANALYZE - Default model to use
 """
 
 import argparse
@@ -412,7 +412,7 @@ def main():
     # Get LLM config
     base_url = os.getenv("LLM_BASE_URL", "http://localhost:4000")
     api_key = os.getenv("LLM_API_KEY", "sk-1234")
-    model = args.model or os.getenv("LLM_MODEL", "gemini-2.5-pro")
+    model = args.model or os.getenv("LLM_MODEL_ANALYZE", "gemini-2.5-pro")
 
     logger.info(f"Using model: {model}")
 

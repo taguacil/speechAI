@@ -291,7 +291,8 @@ AZURE_TRANSLATOR_ENDPOINT=https://your-endpoint.cognitiveservices.azure.com
 # For LLM translation (--llm flag):
 LLM_BASE_URL=http://localhost:4000
 LLM_API_KEY=sk-1234
-LLM_MODEL=kimi-2.5
+LLM_MODEL_ANALYZE=kimi-2.5
+LLM_MODEL_TRANSLATE=kimi-2.5
 ```
 
 #### Transcribe

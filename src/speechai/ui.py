@@ -155,11 +155,14 @@ class SpeechAIApp(App):
     CSS = """
     Screen {
         layout: vertical;
+        background: #f5f5f5;
+        color: #1a1a1a;
     }
 
     #main-container {
         height: 100%;
         padding: 1;
+        background: #f5f5f5;
     }
 
     #top-section {
@@ -172,6 +175,7 @@ class SpeechAIApp(App):
         padding: 1;
         border: solid $primary;
         margin-bottom: 1;
+        background: #ffffff;
     }
 
     #analysis-grid {
@@ -187,6 +191,7 @@ class SpeechAIApp(App):
         min-height: 3;
         padding: 1;
         border: solid $secondary;
+        background: #ffffff;
     }
 
     #sentiment-box {
@@ -217,18 +222,21 @@ class SpeechAIApp(App):
         padding: 1;
         border: solid $success;
         margin-bottom: 0;
+        background: #ffffff;
     }
 
     #latency-panel {
         height: auto;
         padding: 0 1;
         margin-bottom: 1;
+        background: #f5f5f5;
     }
 
     #history-container {
         height: 1fr;
         border: solid $surface;
         padding: 1;
+        background: #ffffff;
     }
 
     #history-log {

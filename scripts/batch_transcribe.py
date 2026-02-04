@@ -41,7 +41,7 @@ Environment variables:
     For LLM translation (--llm):
         LLM_BASE_URL - LiteLLM proxy URL (default: http://localhost:4000)
         LLM_API_KEY - API key for LiteLLM
-        LLM_MODEL - Model to use (default: gemini-2.5-pro)
+        LLM_MODEL_TRANSLATE - Model to use (default: gemini-2.5-pro)
 """
 
 from __future__ import annotations
@@ -523,7 +523,7 @@ def main():
     translator_endpoint = os.getenv("AZURE_TRANSLATOR_ENDPOINT")
     llm_base_url = os.getenv("LLM_BASE_URL", "http://localhost:4000")
     llm_api_key = os.getenv("LLM_API_KEY", "sk-1234")
-    llm_model = os.getenv("LLM_MODEL", "gemini-2.5-pro")
+    llm_model = os.getenv("LLM_MODEL_TRANSLATE", "gemini-2.5-pro")
 
     def get_translator() -> AzureTranslator | LLMTranslator:
         """Create appropriate translator based on --llm flag."""

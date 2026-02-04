@@ -139,6 +139,9 @@ LITELLM_API_KEY=sk-1234
 
 # Gemini transcription (for Gemini mode)
 GEMINI_MODEL=vertex_ai/gemini-2.0-flash
+
+# Debug mode (optional - enables verbose logging)
+SPEECHAI_DEBUG=true
 ```
 
 ### Per-Agent Model Configuration
@@ -165,6 +168,19 @@ LITELLM_MODEL_CONSOLIDATOR=claude-haiku-4.5
 | `deepseek-v3.1` | Strong reasoning, cost-effective |
 | `claude-haiku-4-5` | Natural conversational tone, customer-facing text |
 
+### Debug Mode
+
+Enable verbose logging for troubleshooting:
+
+```bash
+SPEECHAI_DEBUG=true
+```
+
+Debug output includes:
+- **Transcription**: Buffer processing, API response timing, callback invocations
+- **Agents**: Parallel agent completion with results, consolidator timing
+- **UI**: Analysis updates with metrics (signals, suggestions, latency)
+
 ## Usage
 
 Single unified CLI with all options:
@@ -179,7 +195,8 @@ speechai [OPTIONS]
 |--------|-------------|
 | `--file, -f PATH` | Audio file to process (default: microphone) |
 | `--backend, -b {gemini,azure}` | Transcription backend (default: gemini) |
-| `--ui` | Use Textual dashboard instead of CLI |
+| `--ui` | Use Textual terminal dashboard |
+| `--web` | Use Gradio web UI at http://localhost:7860 |
 | `--no-realtime` | Process file as fast as possible (no pacing) |
 | `--batch-timeout MS` | Batch transcripts within time window (ms) |
 | `--batch-max N` | Max segments to batch before processing |
@@ -193,14 +210,20 @@ uv run speechai
 # Live microphone + Azure + CLI
 uv run speechai --backend azure
 
-# Live microphone + Gemini + UI dashboard
+# Live microphone + Gemini + Textual UI dashboard
 uv run speechai --ui
+
+# Live microphone + Gemini + Web UI (Gradio)
+uv run speechai --web
 
 # Stream audio file with Gemini
 uv run speechai --file recording.mp3
 
-# Stream file with Azure + UI
+# Stream file with Azure + Textual UI
 uv run speechai --file recording.mp3 --backend azure --ui
+
+# Stream file with Web UI
+uv run speechai --file recording.mp3 --web
 
 # Fast file processing (no real-time pacing)
 uv run speechai --file recording.mp3 --no-realtime
@@ -214,17 +237,27 @@ uv run speechai -b azure --batch-max 3
 
 **Keyboard commands:**
 - `Ctrl+C` - Quit
-- In UI mode: `r`=reset, `m`=mute, `q`=quit
+- In Textual UI mode: `r`=reset, `m`=mute, `q`=quit
 
-### UI Mode (Textual Dashboard)
+### UI Modes
 
-Real-time dashboard with fixed panels that update as utterances are detected:
+#### Textual Dashboard (`--ui`)
 
-**UI Layout:**
+Terminal-based dashboard with fixed panels that update as utterances are detected:
+
 - Fixed panels for Sentiment, Persona, Product, Competitors
 - Suggestions panel with 2-3 actionable bullets
 - Real-time latency display
 - Scrollable history log
+
+#### Web UI (`--web`)
+
+Gradio-based web interface at http://localhost:7860:
+
+- Browser-accessible dashboard
+- Same panels and layout as Textual UI
+- Auto-refreshing display
+- Reset and Mute controls
 
 Supported audio formats: `.mp3`, `.wav`, `.m4a`, `.ogg`, `.flac`
 
@@ -408,8 +441,9 @@ Session Summary:
 │
 └── src/speechai/
     ├── main.py              # Unified entry point (all modes)
-    ├── ui.py                # Textual UI components
-    ├── display.py           # Terminal output formatting
+    ├── ui.py                # Textual terminal UI components
+    ├── ui_web.py            # Gradio web UI components
+    ├── display.py           # CLI terminal output formatting
     ├── context.py           # Conversation context + role assignment
     ├── transcription.py     # Azure Speech transcriber + data types
     ├── transcription_gemini.py  # Gemini VAD transcriber

@@ -51,6 +51,7 @@ class SalesAssistant:
         realtime: bool = True,
         batch_timeout_ms: int = 0,  # 0 = no batching, >0 = batch window in ms
         batch_max_count: int = 0,  # 0 = no limit, >0 = max segments before flush
+        play_audio: bool = False,  # Play audio through speakers while streaming
     ):
         self.source = source
         self.backend = backend
@@ -59,6 +60,7 @@ class SalesAssistant:
         self.realtime = realtime
         self.batch_timeout_ms = batch_timeout_ms
         self.batch_max_count = batch_max_count
+        self.play_audio = play_audio
         self._debug = os.getenv("SPEECHAI_DEBUG", "").lower() in ("1", "true", "yes")
 
         # Load config and initialize components
@@ -411,11 +413,23 @@ class SalesAssistant:
 
     def _run_file_gemini(self) -> None:
         """Process file using Gemini (frame-by-frame streaming)."""
+        import numpy as np
+        import sounddevice as sd
         from speechai.transcription_file import load_audio_frames
         from speechai.transcription_gemini import GeminiTranscriber
 
         transcriber = GeminiTranscriber()
         transcriber.start(on_result=self._on_transcript, start_mic=False)
+
+        # Audio playback stream (if enabled)
+        audio_stream = None
+        if self.play_audio:
+            audio_stream = sd.OutputStream(
+                samplerate=transcriber.SAMPLE_RATE,
+                channels=1,
+                dtype=np.int16,
+            )
+            audio_stream.start()
 
         try:
             frames, frame_duration = load_audio_frames(
@@ -425,7 +439,8 @@ class SalesAssistant:
             )
 
             total_duration = len(frames) * frame_duration
-            print(f"{Colors.DIM}Duration: {total_duration:.1f}s | Frames: {len(frames)}{Colors.RESET}")
+            play_status = " | Playing audio" if self.play_audio else ""
+            print(f"{Colors.DIM}Duration: {total_duration:.1f}s | Frames: {len(frames)}{play_status}{Colors.RESET}")
             print(f"{Colors.DIM}Streaming...{Colors.RESET}\n")
 
             for i, frame in enumerate(frames):
@@ -433,6 +448,12 @@ class SalesAssistant:
                     break
 
                 frame_start = time.perf_counter()
+
+                # Play audio through speakers
+                if audio_stream:
+                    audio_stream.write(frame)
+
+                # Feed to transcriber
                 transcriber._audio_callback(frame, transcriber.FRAME_SIZE, None, None)
 
                 # Progress display
@@ -459,18 +480,74 @@ class SalesAssistant:
             time.sleep(1.5)
 
         finally:
+            if audio_stream:
+                audio_stream.stop()
+                audio_stream.close()
             transcriber.stop()
 
     def _run_file_azure(self) -> None:
         """Process file using Azure (ConversationTranscriber with diarization)."""
         from speechai.transcription_file import FileTranscriberAzure
 
-        print(f"{Colors.DIM}Starting Azure transcription with speaker diarization...{Colors.RESET}\n")
+        play_status = " | Playing audio" if self.play_audio else ""
+        print(f"{Colors.DIM}Starting Azure transcription with speaker diarization...{play_status}{Colors.RESET}\n")
+
+        # Start audio playback in parallel thread if enabled
+        playback_thread = None
+        if self.play_audio:
+            playback_thread = Thread(
+                target=self._play_audio_file,
+                args=(self.file_path,),
+                daemon=True,
+            )
+            playback_thread.start()
 
         transcriber = FileTranscriberAzure()
         transcriber.stream(self.file_path, on_result=self._on_transcript)
 
+        # Wait for playback to finish if it's still running
+        if playback_thread and playback_thread.is_alive():
+            playback_thread.join()
+
         print(f"\n{Colors.DIM}Azure processing complete.{Colors.RESET}")
+
+    def _play_audio_file(self, file_path: Path) -> None:
+        """Play audio file through speakers."""
+        import numpy as np
+        import sounddevice as sd
+        from speechai.transcription_file import load_audio_frames
+
+        sample_rate = 16000
+        frame_size = 480
+
+        frames, frame_duration = load_audio_frames(
+            file_path,
+            sample_rate=sample_rate,
+            frame_size=frame_size,
+        )
+
+        audio_stream = sd.OutputStream(
+            samplerate=sample_rate,
+            channels=1,
+            dtype=np.int16,
+        )
+        audio_stream.start()
+
+        try:
+            for frame in frames:
+                if not self._running:
+                    break
+
+                frame_start = time.perf_counter()
+                audio_stream.write(frame)
+
+                elapsed = time.perf_counter() - frame_start
+                wait_time = frame_duration - elapsed
+                if wait_time > 0:
+                    time.sleep(wait_time)
+        finally:
+            audio_stream.stop()
+            audio_stream.close()
 
     def _run_cli(self) -> None:
         """Run in CLI mode."""
@@ -543,6 +620,8 @@ class SalesAssistant:
 
     def _stream_file_gemini_ui(self) -> None:
         """Stream file through Gemini in UI mode."""
+        import numpy as np
+        import sounddevice as sd
         from speechai.transcription_file import load_audio_frames
 
         frames, frame_duration = load_audio_frames(
@@ -551,34 +630,69 @@ class SalesAssistant:
             frame_size=self._transcriber.FRAME_SIZE,
         )
 
-        for frame in frames:
-            if not self._app or not self._app.is_running:
-                break
-
-            frame_start = time.perf_counter()
-            self._transcriber._audio_callback(
-                frame, self._transcriber.FRAME_SIZE, None, None
+        # Audio playback stream (if enabled)
+        audio_stream = None
+        if self.play_audio:
+            audio_stream = sd.OutputStream(
+                samplerate=self._transcriber.SAMPLE_RATE,
+                channels=1,
+                dtype=np.int16,
             )
+            audio_stream.start()
 
-            elapsed = time.perf_counter() - frame_start
-            wait_time = frame_duration - elapsed
-            if wait_time > 0:
-                time.sleep(wait_time)
+        try:
+            for frame in frames:
+                if not self._app or not self._app.is_running:
+                    break
 
-        time.sleep(1.5)
+                frame_start = time.perf_counter()
+
+                # Play audio through speakers
+                if audio_stream:
+                    audio_stream.write(frame)
+
+                self._transcriber._audio_callback(
+                    frame, self._transcriber.FRAME_SIZE, None, None
+                )
+
+                elapsed = time.perf_counter() - frame_start
+                wait_time = frame_duration - elapsed
+                if wait_time > 0:
+                    time.sleep(wait_time)
+
+            time.sleep(1.5)
+        finally:
+            if audio_stream:
+                audio_stream.stop()
+                audio_stream.close()
 
     def _stream_file_azure_ui(self) -> None:
         """Stream file through Azure in UI mode."""
         from speechai.transcription_file import FileTranscriberAzure
 
         if self._app and self._app.is_running:
+            play_msg = " (with audio)" if self.play_audio else ""
             self._app.call_from_thread(
                 self._app._log_message,
-                "[dim]Starting Azure recognition...[/dim]",
+                f"[dim]Starting Azure recognition...{play_msg}[/dim]",
             )
+
+        # Start audio playback in parallel thread if enabled
+        playback_thread = None
+        if self.play_audio:
+            playback_thread = Thread(
+                target=self._play_audio_file,
+                args=(self.file_path,),
+                daemon=True,
+            )
+            playback_thread.start()
 
         transcriber = FileTranscriberAzure()
         transcriber.stream(self.file_path, on_result=self._on_transcript)
+
+        # Wait for playback to finish if still running
+        if playback_thread and playback_thread.is_alive():
+            playback_thread.join()
 
     def _run_web(self) -> None:
         """Run in Web UI mode using Gradio."""
@@ -642,6 +756,8 @@ class SalesAssistant:
 
     def _stream_file_gemini_web(self) -> None:
         """Stream file through Gemini in Web UI mode."""
+        import numpy as np
+        import sounddevice as sd
         from speechai.transcription_file import load_audio_frames
 
         frames, frame_duration = load_audio_frames(
@@ -650,34 +766,69 @@ class SalesAssistant:
             frame_size=self._transcriber.FRAME_SIZE,
         )
 
-        for frame in frames:
-            if not self._app or not self._app.is_running:
-                break
-
-            frame_start = time.perf_counter()
-            self._transcriber._audio_callback(
-                frame, self._transcriber.FRAME_SIZE, None, None
+        # Audio playback stream (if enabled)
+        audio_stream = None
+        if self.play_audio:
+            audio_stream = sd.OutputStream(
+                samplerate=self._transcriber.SAMPLE_RATE,
+                channels=1,
+                dtype=np.int16,
             )
+            audio_stream.start()
 
-            elapsed = time.perf_counter() - frame_start
-            wait_time = frame_duration - elapsed
-            if wait_time > 0:
-                time.sleep(wait_time)
+        try:
+            for frame in frames:
+                if not self._app or not self._app.is_running:
+                    break
 
-        time.sleep(1.5)
+                frame_start = time.perf_counter()
+
+                # Play audio through speakers
+                if audio_stream:
+                    audio_stream.write(frame)
+
+                self._transcriber._audio_callback(
+                    frame, self._transcriber.FRAME_SIZE, None, None
+                )
+
+                elapsed = time.perf_counter() - frame_start
+                wait_time = frame_duration - elapsed
+                if wait_time > 0:
+                    time.sleep(wait_time)
+
+            time.sleep(1.5)
+        finally:
+            if audio_stream:
+                audio_stream.stop()
+                audio_stream.close()
 
     def _stream_file_azure_web(self) -> None:
         """Stream file through Azure in Web UI mode."""
         from speechai.transcription_file import FileTranscriberAzure
 
         if self._app and self._app.is_running:
+            play_msg = " (with audio)" if self.play_audio else ""
             self._app.call_from_thread(
                 self._app._log_message,
-                "Starting Azure recognition...",
+                f"Starting Azure recognition...{play_msg}",
             )
+
+        # Start audio playback in parallel thread if enabled
+        playback_thread = None
+        if self.play_audio:
+            playback_thread = Thread(
+                target=self._play_audio_file,
+                args=(self.file_path,),
+                daemon=True,
+            )
+            playback_thread.start()
 
         transcriber = FileTranscriberAzure()
         transcriber.stream(self.file_path, on_result=self._on_transcript)
+
+        # Wait for playback to finish if still running
+        if playback_thread and playback_thread.is_alive():
+            playback_thread.join()
 
     def run(self) -> None:
         """Run the assistant."""
@@ -746,6 +897,11 @@ Examples:
         help="Process file as fast as possible (no real-time pacing)",
     )
     parser.add_argument(
+        "--play",
+        action="store_true",
+        help="Play audio through speakers while streaming file",
+    )
+    parser.add_argument(
         "--batch-timeout",
         type=int,
         default=0,
@@ -779,6 +935,7 @@ Examples:
         realtime=not args.no_realtime,
         batch_timeout_ms=args.batch_timeout,
         batch_max_count=args.batch_max,
+        play_audio=args.play,
     )
 
     def signal_handler(sig, frame):

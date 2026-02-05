@@ -347,6 +347,9 @@ class SalesAssistant:
             upsell_opportunities=output.upsell_opportunities,
         )
 
+        # Get talk ratio for display
+        talk_ratio = self.context.get_talk_ratio()
+
         # Display results
         if self.interface == "cli":
             format_output(
@@ -369,9 +372,12 @@ class SalesAssistant:
                 competitors_mentioned=output.competitors_mentioned,
                 counter_positioning=output.counter_positioning,
                 objection_detected=output.objection_detected,
+                objection_handler=output.objection_handler,
                 upsell_script=output.upsell_script,
+                call_stage=output.call_stage,
                 agent_latencies=output.agent_latencies,
                 role=role,
+                talk_ratio=talk_ratio,
             )
         elif self.interface in ("ui", "web") and self._app and self._app.is_running:
             suggestions = [s.text for s in output.suggestions]
@@ -391,8 +397,13 @@ class SalesAssistant:
                 upsell_opportunities=output.upsell_opportunities,
                 competitors_mentioned=output.competitors_mentioned,
                 objection_detected=output.objection_detected,
+                objection_handler=output.objection_handler,
+                counter_positioning=output.counter_positioning,
+                upsell_script=output.upsell_script,
+                call_stage=output.call_stage,
                 agent_latencies=output.agent_latencies,
                 role=role,
+                talk_ratio=talk_ratio,
             )
 
     def _run_mic_mode(self) -> None:

@@ -60,7 +60,7 @@ class SuggestionPanel(Static):
                 text.append(f"  {i}. ", style="dim")
                 text.append(f"{suggestion}\n", style="white")
         else:
-            text.append("  Waiting for input...", style="dim")
+            text.append("  -", style="dim")
         return text
 
     def update_suggestions(self, suggestions: list[str]) -> None:
@@ -115,14 +115,34 @@ class SignalsPanel(Static):
 
 
 class LatencyPanel(Static):
-    """Panel for displaying latency info."""
+    """Panel for displaying latency and talk ratio info."""
 
     stt_ms = reactive(0.0)
     agents_ms = reactive(0.0)
     agent_latencies: dict[str, float] = {}
+    rep_pct = reactive(0)
+    cust_pct = reactive(0)
 
     def render(self) -> Text:
         text = Text()
+
+        # Talk ratio
+        if self.rep_pct > 0 or self.cust_pct > 0:
+            if self.rep_pct <= 35:
+                ratio_style = "green"
+                status = "Good"
+            elif self.rep_pct <= 50:
+                ratio_style = "yellow"
+                status = "OK"
+            else:
+                ratio_style = "red"
+                status = "Talk less"
+            text.append("Talk: ", style="bold dim")
+            text.append(f"Rep {self.rep_pct}%/Cust {self.cust_pct}% ", style=ratio_style)
+            text.append(f"({status})", style=ratio_style)
+            text.append(" | ", style="dim")
+
+        # Latency
         total = self.stt_ms + self.agents_ms
         text.append("Latency: ", style="bold dim")
         text.append(f"STT {self.stt_ms:.0f}ms", style="blue")
@@ -145,11 +165,71 @@ class LatencyPanel(Static):
         stt_ms: float,
         agents_ms: float,
         agent_latencies: dict[str, float] | None = None,
+        talk_ratio: tuple[int, int] = (0, 0),
     ) -> None:
-        """Update latency values."""
+        """Update latency and talk ratio values."""
         self.stt_ms = stt_ms
         self.agents_ms = agents_ms
         self.agent_latencies = agent_latencies or {}
+        self.rep_pct, self.cust_pct = talk_ratio
+        self.refresh()
+
+
+class ScriptsPanel(Static):
+    """Panel for displaying actionable scripts."""
+
+    counter_script = reactive("")
+    objection_script = reactive("")
+    upsell_script = reactive("")
+    call_stage = reactive("discovery")
+
+    def render(self) -> Text:
+        text = Text()
+
+        # Call stage indicator
+        stage_styles = {
+            "discovery": "blue",
+            "presentation": "cyan",
+            "objection": "yellow",
+            "closing": "green",
+        }
+        stage_style = stage_styles.get(self.call_stage, "dim")
+        text.append("Stage: ", style="bold dim")
+        text.append(f"[{self.call_stage.upper()}]", style=f"bold {stage_style}")
+        text.append("\n")
+
+        # Scripts
+        has_scripts = self.counter_script or self.objection_script or self.upsell_script
+        if has_scripts:
+            if self.counter_script:
+                script = self.counter_script[:80] + "..." if len(self.counter_script) > 80 else self.counter_script
+                text.append("SAY: ", style="bold yellow")
+                text.append(f"{script}\n", style="yellow")
+            if self.objection_script:
+                script = self.objection_script[:80] + "..." if len(self.objection_script) > 80 else self.objection_script
+                text.append("HANDLE: ", style="bold red")
+                text.append(f"{script}\n", style="red")
+            if self.upsell_script:
+                script = self.upsell_script[:80] + "..." if len(self.upsell_script) > 80 else self.upsell_script
+                text.append("UPSELL: ", style="bold green")
+                text.append(f"{script}\n", style="green")
+        else:
+            text.append("-", style="dim")
+
+        return text
+
+    def update_scripts(
+        self,
+        call_stage: str = "discovery",
+        counter_positioning: str = "",
+        objection_handler: str = "",
+        upsell_script: str = "",
+    ) -> None:
+        """Update scripts display."""
+        self.call_stage = call_stage
+        self.counter_script = counter_positioning
+        self.objection_script = objection_handler
+        self.upsell_script = upsell_script
         self.refresh()
 
 
@@ -235,8 +315,17 @@ class SpeechAIApp(App):
         min-height: 9;
         padding: 1;
         border: solid $success;
-        margin-bottom: 0;
+        margin-bottom: 1;
         background: #ffffff;
+    }
+
+    #scripts-panel {
+        height: auto;
+        min-height: 5;
+        padding: 1;
+        border: solid $warning;
+        margin-bottom: 1;
+        background: #fffef0;
     }
 
     #latency-panel {
@@ -313,6 +402,9 @@ class SpeechAIApp(App):
             # Suggestions
             yield SuggestionPanel(id="suggestions-panel")
 
+            # Scripts (call stage, counter-positioning, objection handler)
+            yield ScriptsPanel(id="scripts-panel")
+
             # Latency
             yield LatencyPanel(id="latency-panel")
 
@@ -349,8 +441,13 @@ class SpeechAIApp(App):
         upsell_opportunities: list[str] | None = None,
         competitors_mentioned: list[str] | None = None,
         objection_detected: str = "",
+        objection_handler: str = "",
+        counter_positioning: str = "",
+        upsell_script: str = "",
+        call_stage: str = "discovery",
         agent_latencies: dict[str, float] | None = None,
         role: str = "customer",
+        talk_ratio: tuple[int, int] = (0, 0),
         **kwargs,
     ) -> None:
         """Update all UI panels with new analysis results."""
@@ -416,9 +513,18 @@ class SpeechAIApp(App):
         suggestions_panel = self.query_one("#suggestions-panel", SuggestionPanel)
         suggestions_panel.update_suggestions(suggestions)
 
-        # Update latency
+        # Update scripts panel
+        scripts_panel = self.query_one("#scripts-panel", ScriptsPanel)
+        scripts_panel.update_scripts(
+            call_stage=call_stage,
+            counter_positioning=counter_positioning if competitors_mentioned else "",
+            objection_handler=objection_handler if objection_detected else "",
+            upsell_script=upsell_script if upsell_opportunities else "",
+        )
+
+        # Update latency and talk ratio
         latency_panel = self.query_one("#latency-panel", LatencyPanel)
-        latency_panel.update_latency(stt_latency_ms, agents_latency_ms, agent_latencies)
+        latency_panel.update_latency(stt_latency_ms, agents_latency_ms, agent_latencies, talk_ratio)
 
         # Add to history
         sentiment_style = sentiment_colors.get(sentiment, "white")

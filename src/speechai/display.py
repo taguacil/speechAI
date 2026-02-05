@@ -118,9 +118,12 @@ def format_output(
     competitors_mentioned: list[str] | None = None,
     counter_positioning: str = "",
     objection_detected: str = "",
+    objection_handler: str = "",
     upsell_script: str = "",
+    call_stage: str = "discovery",
     agent_latencies: dict[str, float] | None = None,
     role: str = "customer",
+    talk_ratio: tuple[int, int] = (0, 0),
 ) -> None:
     """Format and print the analysis output.
 
@@ -153,9 +156,19 @@ def format_output(
     role_label = "Rep" if is_sales_rep else "Customer"
     role_color = Colors.MAGENTA if is_sales_rep else Colors.CYAN
 
-    # Header with role, sentiment, and persona badge
+    # Call stage colors
+    stage_colors = {
+        "discovery": Colors.BLUE,
+        "presentation": Colors.CYAN,
+        "objection": Colors.YELLOW,
+        "closing": Colors.GREEN,
+    }
+    stage_color = stage_colors.get(call_stage, Colors.DIM)
+
+    # Header with role, sentiment, call stage, and persona badge
     header_parts = [
         f"{Colors.DIM}[{timestamp}]{Colors.RESET}",
+        f"{stage_color}[{call_stage.upper()}]{Colors.RESET}",
         f"{role_color}{role_label}{Colors.RESET} │",
         f"{sentiment_color}{Colors.BOLD}{sentiment.upper()}{Colors.RESET}",
         f"{Colors.DIM}({confidence:.0%}){Colors.RESET}",
@@ -214,6 +227,39 @@ def format_output(
         print(f"  {Colors.DIM}─{Colors.RESET}")
         for insight in insights:
             print(f"  {insight}")
+
+    # Scripts section (counter-positioning, objection handler, upsell script)
+    scripts = []
+    if counter_positioning and competitors_mentioned:
+        # Truncate long scripts
+        script = counter_positioning[:100] + "..." if len(counter_positioning) > 100 else counter_positioning
+        scripts.append(f"{Colors.YELLOW}SAY: {script}{Colors.RESET}")
+    if objection_handler and objection_detected:
+        script = objection_handler[:100] + "..." if len(objection_handler) > 100 else objection_handler
+        scripts.append(f"{Colors.RED}HANDLE: {script}{Colors.RESET}")
+    if upsell_script and upsell_opportunities:
+        script = upsell_script[:100] + "..." if len(upsell_script) > 100 else upsell_script
+        scripts.append(f"{Colors.GREEN}UPSELL: {script}{Colors.RESET}")
+
+    if scripts:
+        print(f"  {Colors.BOLD}━━━ SCRIPTS ━━━{Colors.RESET}")
+        for script in scripts:
+            print(f"  {script}")
+
+    # Talk ratio display
+    rep_pct, cust_pct = talk_ratio
+    if rep_pct > 0 or cust_pct > 0:
+        # Color code: green if rep talks less, yellow if balanced, red if rep talks too much
+        if rep_pct <= 35:
+            ratio_color = Colors.GREEN
+            ratio_status = "Good"
+        elif rep_pct <= 50:
+            ratio_color = Colors.YELLOW
+            ratio_status = "OK"
+        else:
+            ratio_color = Colors.RED
+            ratio_status = "Talk less"
+        print(f"  {Colors.DIM}Talk Ratio:{Colors.RESET} {ratio_color}Rep {rep_pct}% / Customer {cust_pct}% ({ratio_status}){Colors.RESET}")
 
     # Latency breakdown
     total_latency = stt_latency_ms + agents_latency_ms

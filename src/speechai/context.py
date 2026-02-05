@@ -65,6 +65,10 @@ class ConversationContext:
     speaker_roles: dict[str, str] = field(default_factory=dict)  # speaker_id -> role
     _last_role: str = ""  # Track last role for Unknown speaker alternation
 
+    # Talk-to-listen ratio tracking
+    rep_word_count: int = 0
+    customer_word_count: int = 0
+
     def assign_role(self, speaker: str) -> str:
         """Assign role to speaker based on call type and order.
 
@@ -167,6 +171,13 @@ class ConversationContext:
         )
         self.utterances.append(utterance)
 
+        # Track word counts for talk-to-listen ratio
+        word_count = len(text.split())
+        if role == "sales_rep":
+            self.rep_word_count += word_count
+        else:
+            self.customer_word_count += word_count
+
         # Extract structured signals from text (only for customers)
         if role == "customer":
             self._extract_signals(utterance, len(self.utterances) - 1)
@@ -239,7 +250,24 @@ class ConversationContext:
             "products_discussed": list(set(all_products)),
             "competitor_counts": competitor_counts,
             "upsell_opportunities": list(set(all_upsells)),
+            # Talk ratio
+            "talk_ratio": self.get_talk_ratio(),
         }
+
+    def get_talk_ratio(self) -> tuple[int, int]:
+        """Get rep-to-customer talk ratio as percentages.
+
+        Returns:
+            Tuple of (rep_percentage, customer_percentage).
+            Ideal is around (30, 70) - rep should listen more than talk.
+        """
+        total = self.rep_word_count + self.customer_word_count
+        if total == 0:
+            return (0, 0)
+
+        rep_pct = round(100 * self.rep_word_count / total)
+        cust_pct = 100 - rep_pct
+        return (rep_pct, cust_pct)
 
     def format_for_prompt(self, max_utterances: int = 10) -> str:
         """Format context for inclusion in agent prompts."""

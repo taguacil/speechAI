@@ -256,41 +256,44 @@ class SalesAssistant:
 
         # Handle batched multi-speaker results
         if result.segments:
+            if self._debug:
+                print(f"[DEBUG] Processing batched result with {len(result.segments)} segments")
             customer_texts = []
+            sales_rep_texts = []
 
-            # Store all segments in history and display
+            # Collect texts by role
             for segment in result.segments:
                 seg_role = self.context.assign_role(segment.speaker_id)
-
+                if self._debug:
+                    print(f"[DEBUG] Segment: speaker={segment.speaker_id}, role={seg_role}")
                 if seg_role == "sales_rep":
-                    # Store and display sales rep segment
-                    self.context.add_utterance(
-                        text=segment.text,
-                        speaker=segment.speaker_id,
-                        role=seg_role,
-                        sentiment="neutral",
-                        confidence=1.0,
-                        signals=[],
-                    )
-                    if self.interface == "cli":
-                        print(f"{Colors.DIM}[{timestamp}] Rep: {segment.text}{Colors.RESET}")
-                    elif self.interface in ("ui", "web") and self._app and self._app.is_running:
-                        self._app.call_from_thread(
-                            self._app._log_message,
-                            f"[dim]Rep: {segment.text}[/dim]",
-                        )
+                    sales_rep_texts.append(segment.text)
                 else:
-                    # Collect customer text for combined analysis
                     customer_texts.append(segment.text)
 
-            # If no customer text in batch, we're done
-            if not customer_texts:
-                return
+            # Process sales rep segments if any
+            if sales_rep_texts:
+                rep_combined = " ".join(sales_rep_texts)
+                await self._process_single_utterance(
+                    text=rep_combined,
+                    speaker="Speaker-1",
+                    role="sales_rep",
+                    stt_latency_ms=stt_latency_ms,
+                    timestamp=timestamp,
+                )
 
-            # Combined customer text for single agent analysis
-            combined_text = " ".join(customer_texts)
-            speaker = "Speaker-2"
-            role = "customer"
+            # Process customer segments if any
+            if customer_texts:
+                cust_combined = " ".join(customer_texts)
+                await self._process_single_utterance(
+                    text=cust_combined,
+                    speaker="Speaker-2",
+                    role="customer",
+                    stt_latency_ms=stt_latency_ms,
+                    timestamp=timestamp,
+                )
+
+            return
 
         else:
             # Single-speaker result (original flow)
@@ -298,39 +301,41 @@ class SalesAssistant:
             speaker = result.speaker_id
             role = self.context.assign_role(speaker)
 
-            # Sales rep utterances: store transcript only, skip agent analysis
-            if role == "sales_rep":
-                self.context.add_utterance(
-                    text=combined_text,
-                    speaker=speaker,
-                    role=role,
-                    sentiment="neutral",
-                    confidence=1.0,
-                    signals=[],
-                )
-                if self.interface == "cli":
-                    print(f"{Colors.DIM}[{timestamp}] Rep: {combined_text}{Colors.RESET}")
-                elif self.interface in ("ui", "web") and self._app and self._app.is_running:
-                    self._app.call_from_thread(
-                        self._app._log_message,
-                        f"[dim]Rep: {combined_text}[/dim]",
-                    )
-                return
+            await self._process_single_utterance(
+                text=combined_text,
+                speaker=speaker,
+                role=role,
+                stt_latency_ms=stt_latency_ms,
+                timestamp=timestamp,
+            )
 
-        # Customer utterances: full agent analysis (runs once for batches)
+    async def _process_single_utterance(
+        self,
+        text: str,
+        speaker: str,
+        role: str,
+        stt_latency_ms: float,
+        timestamp: str,
+    ) -> None:
+        """Process a single utterance through agents and display results."""
+        # Full agent analysis for both customer and sales rep
         context_str = self.context.format_for_prompt(max_utterances=10)
-        role_label = "Customer"
+        role_label = "Sales Rep" if role == "sales_rep" else "Customer"
 
         output = await self.orchestrator.process(
-            text=combined_text,
+            text=text,
             speaker=speaker,
             conversation_context=context_str,
             role=role_label,
         )
 
-        # Add customer utterance to context (for batches, this is the combined text)
+        if self._debug:
+            print(f"[DEBUG] _process_single_utterance: role={role}, persona={output.persona_name}, "
+                  f"segment={output.persona_segment}, product={output.recommended_product}")
+
+        # Add utterance to context
         self.context.add_utterance(
-            text=combined_text,
+            text=text,
             speaker=speaker,
             role=role,
             sentiment=output.sentiment,
@@ -347,7 +352,7 @@ class SalesAssistant:
             format_output(
                 timestamp=timestamp,
                 speaker=speaker,
-                text=combined_text,
+                text=text,
                 sentiment=output.sentiment,
                 confidence=output.confidence,
                 signals=output.signals,
@@ -366,12 +371,13 @@ class SalesAssistant:
                 objection_detected=output.objection_detected,
                 upsell_script=output.upsell_script,
                 agent_latencies=output.agent_latencies,
+                role=role,
             )
         elif self.interface in ("ui", "web") and self._app and self._app.is_running:
             suggestions = [s.text for s in output.suggestions]
             self._app.call_from_thread(
                 self._app.update_analysis,
-                text=combined_text,
+                text=text,
                 speaker=speaker,
                 sentiment=output.sentiment,
                 confidence=output.confidence,
@@ -386,6 +392,7 @@ class SalesAssistant:
                 competitors_mentioned=output.competitors_mentioned,
                 objection_detected=output.objection_detected,
                 agent_latencies=output.agent_latencies,
+                role=role,
             )
 
     def _run_mic_mode(self) -> None:

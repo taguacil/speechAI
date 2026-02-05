@@ -120,6 +120,7 @@ def format_output(
     objection_detected: str = "",
     upsell_script: str = "",
     agent_latencies: dict[str, float] | None = None,
+    role: str = "customer",
 ) -> None:
     """Format and print the analysis output.
 
@@ -147,10 +148,15 @@ def format_output(
     """
     sentiment_color = SENTIMENT_COLORS.get(sentiment, Colors.YELLOW)
 
-    # Header with speaker, sentiment, and persona badge
+    # Determine role label and color
+    is_sales_rep = role == "sales_rep"
+    role_label = "Rep" if is_sales_rep else "Customer"
+    role_color = Colors.MAGENTA if is_sales_rep else Colors.CYAN
+
+    # Header with role, sentiment, and persona badge
     header_parts = [
         f"{Colors.DIM}[{timestamp}]{Colors.RESET}",
-        f"{Colors.CYAN}{speaker}{Colors.RESET} │",
+        f"{role_color}{role_label}{Colors.RESET} │",
         f"{sentiment_color}{Colors.BOLD}{sentiment.upper()}{Colors.RESET}",
         f"{Colors.DIM}({confidence:.0%}){Colors.RESET}",
     ]

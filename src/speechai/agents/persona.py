@@ -59,6 +59,35 @@ PERSONAS = {
     },
 }
 
+# Sales Rep Communication Styles (for coaching feedback)
+SALES_REP_STYLES = {
+    "consultative_style": {
+        "name": "Consultative",
+        "segment": "Best Practice",
+        "feedback": "Good consultative approach - asking questions and understanding needs",
+    },
+    "product_focused": {
+        "name": "Product Focused",
+        "segment": "Improvement Needed",
+        "feedback": "Connect features to customer benefits",
+    },
+    "pushy_style": {
+        "name": "Pushy",
+        "segment": "Needs Coaching",
+        "feedback": "Slow down, listen to customer",
+    },
+    "rapport_building": {
+        "name": "Rapport Building",
+        "segment": "Good Technique",
+        "feedback": "Good rapport building",
+    },
+    "objection_handling": {
+        "name": "Objection Handler",
+        "segment": "Skill Assessment",
+        "feedback": "Effective objection handling",
+    },
+}
+
 PERSONA_SEGMENTS = {
     "premium_seekers": {
         "name": "Premium Seekers",
@@ -165,7 +194,11 @@ class PersonaAgent(BaseAgent):
             data = json.loads(content)
 
             persona_id = data.get("persona_id", "")
+
+            # Check customer personas first, then sales rep styles
             persona_info = PERSONAS.get(persona_id, {})
+            if not persona_info:
+                persona_info = SALES_REP_STYLES.get(persona_id, {})
 
             return {
                 "persona_id": persona_id,
@@ -174,7 +207,7 @@ class PersonaAgent(BaseAgent):
                 "confidence": min(1.0, max(0.0, float(data.get("confidence", 0.5)))),
                 "detected_triggers": data.get("detected_triggers", [])[:5],
                 "recommended_products": persona_info.get("products", data.get("recommended_products", []))[:3],
-                "pitch_style": data.get("pitch_style", "")[:100],
+                "pitch_style": persona_info.get("feedback", data.get("pitch_style", ""))[:100],
             }
         except (json.JSONDecodeError, ValueError, TypeError) as e:
             print(f"[persona] Parse error: {e}")

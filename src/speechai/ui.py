@@ -74,20 +74,24 @@ class UtterancePanel(Static):
 
     text = reactive("")
     speaker = reactive("")
+    role = reactive("")
 
     def render(self) -> Text:
         result = Text()
         result.append("Last Utterance:\n", style="bold cyan")
         if self.text:
-            result.append(f"  [{self.speaker}] ", style="dim")
+            role_label = "Rep" if self.role == "sales_rep" else "Customer"
+            role_style = "magenta" if self.role == "sales_rep" else "cyan"
+            result.append(f"  [{role_label}] ", style=role_style)
             result.append(f'"{self.text}"', style="italic")
         else:
             result.append("  Listening...", style="dim")
         return result
 
-    def update_utterance(self, text: str, speaker: str) -> None:
+    def update_utterance(self, text: str, speaker: str, role: str = "customer") -> None:
         """Update the utterance display."""
         self.speaker = speaker
+        self.role = role
         self.text = text
 
 
@@ -179,19 +183,29 @@ class SpeechAIApp(App):
     }
 
     #analysis-grid {
-        layout: grid;
-        grid-size: 2 2;
-        grid-gutter: 1;
+        layout: vertical;
+        height: auto;
+        margin-bottom: 1;
+    }
+
+    .analysis-row {
+        layout: horizontal;
         height: auto;
         margin-bottom: 1;
     }
 
     .analysis-box {
+        width: 1fr;
         height: auto;
-        min-height: 3;
+        min-height: 4;
         padding: 1;
+        margin-right: 1;
         border: solid $secondary;
         background: #ffffff;
+    }
+
+    .analysis-box:last-child {
+        margin-right: 0;
     }
 
     #sentiment-box {
@@ -271,23 +285,27 @@ class SpeechAIApp(App):
             # Current utterance
             yield UtterancePanel(id="utterance-panel")
 
-            # Analysis grid - 2x2 layout
-            with Container(id="analysis-grid"):
-                with Vertical(id="sentiment-box", classes="analysis-box"):
-                    yield InfoPanel("Sentiment", panel_id="sentiment-value", color="green")
-                    yield InfoPanel("Confidence", panel_id="confidence-value", color="dim")
+            # Analysis grid - 2 rows of 2 boxes each
+            with Vertical(id="analysis-grid"):
+                # Row 1: Sentiment and Persona
+                with Horizontal(classes="analysis-row"):
+                    with Vertical(id="sentiment-box", classes="analysis-box"):
+                        yield InfoPanel("Sentiment", panel_id="sentiment-value", color="green")
+                        yield InfoPanel("Confidence", panel_id="confidence-value", color="dim")
 
-                with Vertical(id="persona-box", classes="analysis-box"):
-                    yield InfoPanel("Persona", panel_id="persona-value", color="magenta")
-                    yield InfoPanel("Segment", panel_id="segment-value", color="dim")
+                    with Vertical(id="persona-box", classes="analysis-box"):
+                        yield InfoPanel("Persona", panel_id="persona-value", color="magenta")
+                        yield InfoPanel("Segment", panel_id="segment-value", color="dim")
 
-                with Vertical(id="product-box", classes="analysis-box"):
-                    yield InfoPanel("Recommend", panel_id="product-value", color="cyan")
-                    yield InfoPanel("Upsell", panel_id="upsell-value", color="green")
+                # Row 2: Product and Competitor
+                with Horizontal(classes="analysis-row"):
+                    with Vertical(id="product-box", classes="analysis-box"):
+                        yield InfoPanel("Recommend", panel_id="product-value", color="cyan")
+                        yield InfoPanel("Upsell", panel_id="upsell-value", color="green")
 
-                with Vertical(id="competitor-box", classes="analysis-box"):
-                    yield InfoPanel("Competitor", panel_id="competitor-value", color="red")
-                    yield InfoPanel("Objection", panel_id="objection-value", color="yellow")
+                    with Vertical(id="competitor-box", classes="analysis-box"):
+                        yield InfoPanel("Competitor", panel_id="competitor-value", color="red")
+                        yield InfoPanel("Objection", panel_id="objection-value", color="yellow")
 
             # Signals
             yield SignalsPanel(id="signals-panel")
@@ -332,19 +350,24 @@ class SpeechAIApp(App):
         competitors_mentioned: list[str] | None = None,
         objection_detected: str = "",
         agent_latencies: dict[str, float] | None = None,
+        role: str = "customer",
         **kwargs,
     ) -> None:
         """Update all UI panels with new analysis results."""
         if self._debug:
             self._log_message(
-                f"[dim]DEBUG update_analysis: speaker={speaker}, sentiment={sentiment}, "
+                f"[dim]DEBUG update_analysis: speaker={speaker}, role={role}, sentiment={sentiment}, "
                 f"signals={len(signals)}, suggestions={len(suggestions)}, "
                 f"stt={stt_latency_ms:.0f}ms, agents={agents_latency_ms:.0f}ms[/dim]"
+            )
+            self._log_message(
+                f"[dim]DEBUG persona={persona_name}, segment={persona_segment}, "
+                f"product={recommended_product}, upsell={upsell_opportunities}[/dim]"
             )
 
         # Update utterance
         utterance = self.query_one("#utterance-panel", UtterancePanel)
-        utterance.update_utterance(text, speaker)
+        utterance.update_utterance(text, speaker, role)
 
         # Update sentiment with color
         sentiment_colors = {

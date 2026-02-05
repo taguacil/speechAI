@@ -279,7 +279,10 @@ class AgentOrchestrator:
             for name, lat in agent_latencies.items():
                 print(f"  {name}: {lat:.0f}ms")
             print(f"  sentiment={sentiment_data.get('sentiment')} ({sentiment_data.get('confidence', 0):.0%})")
-            print(f"  persona={persona_data.get('persona_name', '-')}")
+            print(f"  persona={persona_data.get('persona_name', '-')} segment={persona_data.get('segment', '-')}")
+            print(f"  product={product_data.get('recommended_product', '-')} upsell={product_data.get('upsell_opportunities', [])}")
+            print(f"  persona_result.success={persona_result.success if persona_result else 'None'}")
+            print(f"  product_result.success={product_result.success if product_result else 'None'}")
 
         # Run consolidator with all agent outputs
         consolidator_result = await self.consolidator.analyze(

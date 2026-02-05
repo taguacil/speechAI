@@ -15,6 +15,7 @@ class AnalysisState:
     # Utterance
     text: str = ""
     speaker: str = ""
+    role: str = "customer"
 
     # Sentiment
     sentiment: str = ""
@@ -72,6 +73,7 @@ class AnalysisState:
             return {
                 "text": self.text,
                 "speaker": self.speaker,
+                "role": self.role,
                 "sentiment": self.sentiment,
                 "confidence": self.confidence,
                 "persona_name": self.persona_name,
@@ -95,6 +97,7 @@ class AnalysisState:
         with self._lock:
             self.text = ""
             self.speaker = ""
+            self.role = "customer"
             self.sentiment = ""
             self.confidence = 0.0
             self.persona_name = ""
@@ -125,10 +128,11 @@ def create_gradio_app(state: AnalysisState) -> gr.Blocks:
         }
         return colors.get(sentiment.lower(), "#6b7280")
 
-    def format_utterance(text: str, speaker: str, interim_text: str, interim_speaker: str) -> str:
+    def format_utterance(text: str, speaker: str, role: str, interim_text: str, interim_speaker: str) -> str:
         """Format the utterance display."""
         if text:
-            return f"**[{speaker}]** *\"{text}\"*"
+            role_label = "Rep" if role == "sales_rep" else "Customer"
+            return f"**[{role_label}]** *\"{text}\"*"
         if interim_text:
             return f"**[{interim_speaker}]** *\"{interim_text}...\"* (interim)"
         return "*Listening...*"
@@ -211,6 +215,7 @@ def create_gradio_app(state: AnalysisState) -> gr.Blocks:
             format_utterance(
                 snapshot["text"],
                 snapshot["speaker"],
+                snapshot["role"],
                 snapshot["interim_text"],
                 snapshot["interim_speaker"],
             ),
@@ -370,18 +375,20 @@ class WebUIAdapter:
         competitors_mentioned: list[str] | None = None,
         objection_detected: str = "",
         agent_latencies: dict[str, float] | None = None,
+        role: str = "customer",
         **kwargs,
     ) -> None:
         """Update state with new analysis results."""
         if self._debug:
             print(
-                f"[DEBUG] WebUI update_analysis: speaker={speaker}, sentiment={sentiment}, "
+                f"[DEBUG] WebUI update_analysis: speaker={speaker}, role={role}, sentiment={sentiment}, "
                 f"signals={len(signals)}, suggestions={len(suggestions)}, "
                 f"stt={stt_latency_ms:.0f}ms, agents={agents_latency_ms:.0f}ms"
             )
         self.state.update(
             text=text,
             speaker=speaker,
+            role=role,
             sentiment=sentiment,
             confidence=confidence,
             signals=signals,
@@ -399,15 +406,10 @@ class WebUIAdapter:
             interim_speaker="",
         )
 
-        # Add to history
-        sentiment_colors = {
-            "positive": "green",
-            "negative": "red",
-            "neutral": "yellow",
-        }
-        color = sentiment_colors.get(sentiment, "white")
+        # Add to history with role label
+        role_label = "Rep" if role == "sales_rep" else "Customer"
         truncated = text[:60] + "..." if len(text) > 60 else text
-        self.state.add_history(f"[{speaker}] {sentiment.upper()} \"{truncated}\"")
+        self.state.add_history(f"[{role_label}] {sentiment.upper()} \"{truncated}\"")
 
     def update_interim(self, speaker: str, text: str) -> None:
         """Update with interim transcription."""
